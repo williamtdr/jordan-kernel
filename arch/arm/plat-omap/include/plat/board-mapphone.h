@@ -64,9 +64,6 @@ extern struct ov5650_platform_data mapphone_ov5650_platform_data;
 #ifdef CONFIG_VIDEO_OMAP3_HPLENS
 extern struct hplens_platform_data mapphone_hplens_platform_data;
 #endif
-#ifdef CONFIG_VIDEO_CAM_ISE
-extern struct camise_platform_data mapphone_camise_platform_data;
-#endif
 
 #define GPIO_MT9P012_STANDBY		58
 #define GPIO_MT9P012_RESET		98
@@ -87,9 +84,6 @@ extern struct camise_platform_data mapphone_camise_platform_data;
 /* legacy MIPI SRC DIV, kept to avoid conflict with old code */
 #define OMAP_MCAM_SRC_DIV_MIPI	            4
 
-#define MAPPHONE_WIFI_PMENA_GPIO	186
-#define MAPPHONE_WIFI_IRQ_GPIO		65
-
 /* must match value defined in device tree schema */
 #define MAPPHONE_BP_VIACBP71            0x00220000
 
@@ -97,5 +91,6 @@ extern struct camise_platform_data mapphone_camise_platform_data;
 extern char *bp_model;
 
 extern void change_vio_mode(int source, int value);
-extern int is_cpcap_vio_supply_converter(void);
+
+extern int mapphone_set_l3_opp2_rate(unsigned long rate);
 #endif /*  __ASM_ARCH_OMAP_MAPPHONE_H */

@@ -417,6 +417,7 @@ struct snd_soc_codec {
 	struct dentry *debugfs_pop_time;
 	struct dentry *debugfs_dapm;
 #endif
+	int aai_active; /* Is any analog link active */
 };
 
 /* codec device */

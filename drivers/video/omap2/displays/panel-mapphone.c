@@ -57,6 +57,7 @@
 #define EDISCO_CMD_MCS_ON              0x3
 #define EDISCO_CMD_MCS_OFF             0x0
 
+#define EDISCO_READ_ID1                0xDA
 #define EDISCO_LONG_WRITE	0x29
 #define EDISCO_SHORT_WRITE_1	0x23
 #define EDISCO_SHORT_WRITE_0	0x13
@@ -86,11 +87,10 @@
 #define MOT_DISP_280_MIPI_320_240_VM	0x00090003
 #define MOT_DISP_310_1_MIPI_320_480_CM	0x001f0000
 #define MOT_DISP_310_2_MIPI_320_480_CM	0x000a0003
+#define MOT_DISP_MIPI_240_320_CM   	0x000a0004
+#define MOT_DISP_MIPI_220_176_CM        0x001a0002
 
 static bool mapphone_panel_device_read_dt;
-
-/* Display Control Hook */
-extern u8 display_brightness(void);
 
 /* these enum must be matched with MOT DT */
 enum omap_dss_device_disp_pxl_fmt {
@@ -126,6 +126,7 @@ struct mapphone_data {
 };
 
 static void mapphone_panel_disable_local(struct omap_dss_device *dssdev);
+static int mapphone_panel_refresh_rate(int ref_rate);
 
 static bool mapphone_panel_sw_te_sup(struct omap_dss_device *dssdev)
 {
@@ -235,6 +236,8 @@ static int mapphone_panel_display_on(struct omap_dss_device *dssdev)
 		case MOT_DISP_430_MIPI_480_854_CM:
 		case MOT_DISP_310_1_MIPI_320_480_CM:
 		case MOT_DISP_310_2_MIPI_320_480_CM:
+		case MOT_DISP_MIPI_240_320_CM:
+		case MOT_DISP_MIPI_220_176_CM:
 			ret = dsi_mipi_cm_panel_on(dssdev);
 			break;
 		default:
@@ -382,17 +385,30 @@ static u16 mapphone_panel_read_supplier_id(void)
 {
 	static u16 id = SUPPLIER_ID_INVALID;
 	u8 data[2];
+	struct device_node *panel_node;
+	const void *panel_prop;
+	unsigned long dev_panel_id = 0x0;
 
-	if (id != SUPPLIER_ID_INVALID)
-		goto end;
+	/* return err if fail to open DT */
+	panel_node = of_find_node_by_path(DT_PATH_DISPLAY1);
+	if (panel_node == NULL)
+		return -ENODEV;
+
+	panel_prop = of_get_property(panel_node, "type", NULL);
+	if (panel_prop != NULL)
+		dev_panel_id = *(u32 *)panel_prop;
 
 	if (dsi_vc_set_max_rx_packet_size(EDISCO_CMD_VC, 2))
 		goto end;
 
-	if (dsi_vc_dcs_read(EDISCO_CMD_VC,
+	if (dev_panel_id == MOT_DISP_MIPI_220_176_CM) {
+		dsi_vc_dcs_read(EDISCO_CMD_VC, EDISCO_READ_ID1, data, 2);
+		id = data[0];
+	} else {
+		if (dsi_vc_dcs_read(EDISCO_CMD_VC,
 			    EDISCO_CMD_READ_DDB_START, data, 2) == 2)
-		id = (data[0] << 8) | data[1];
-
+			id = (data[0] << 8) | data[1];
+	}
 	dsi_vc_set_max_rx_packet_size(EDISCO_CMD_VC, 1);
 
 end:
@@ -439,6 +455,35 @@ static ssize_t mapphone_panel_supplier_id_show(struct device *dev,
 }
 
 static DEVICE_ATTR(supplier_id, S_IRUGO, mapphone_panel_supplier_id_show, NULL);
+
+/* Refresh rate function is currently only for MOT_DISP_MIPI_220_176_CM */
+static ssize_t mapphone_panel_refresh_rate_set(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	unsigned refresh_rate = 0;
+	int ret;
+
+	if (!buf) {
+		printk(KERN_ERR "invalid command\n");
+		return -EINVAL;
+	}
+
+	dsi_bus_lock();
+	sscanf(buf, "%d", &refresh_rate);
+
+	ret =  mapphone_panel_refresh_rate(refresh_rate);
+	if (ret)
+		goto error;
+
+	dsi_bus_unlock();
+	return size;
+error:
+	dsi_bus_unlock();
+	return -EINVAL;
+}
+
+static DEVICE_ATTR(refresh_rate, 0646, NULL, mapphone_panel_refresh_rate_set);
 
 static int mapphone_panel_probe(struct omap_dss_device *dssdev)
 {
@@ -492,10 +537,19 @@ static int mapphone_panel_probe(struct omap_dss_device *dssdev)
 		goto removeattr;
 	}
 
+	error = device_create_file(&panel_dev.dssdev->dev,
+		&dev_attr_refresh_rate);
+	if (error < 0) {
+		pr_err("%s: device refresh_rate create failed: %d\n",
+			__func__, error);
+		goto removeattr2;
+	}
+
 	atomic_set(&data->state, PANEL_OFF);
 
 	return 0;
-
+removeattr2:
+	device_remove_file(&panel_dev.dssdev->dev, &dev_attr_supplier_name);
 removeattr:
 	device_remove_file(&panel_dev.dssdev->dev, &dev_attr_supplier_id);
 unregister:
@@ -619,6 +673,368 @@ static int dsi_mipi_248_vm_320_240_panel_enable(struct omap_dss_device *dssdev)
 error:
 	return -EINVAL;
 }
+
+static int dsi_mipi_cm_240_320_panel_enable(struct omap_dss_device *dssdev)
+{
+	u8 data[5];
+	int ret;
+
+	DBG("dsi_mipi_cm_240_320_panel_enable() \n");
+
+	data[0] = EDISCO_CMD_EXIT_SLEEP_MODE;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 1);
+
+	mdelay(100);
+
+	data[0] = 0x3A;
+	data[1] = 0x07;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 2);
+
+	/* set page, column address */
+	data[0] = EDISCO_CMD_SET_COLUMN_ADDRESS;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	data[3] = (dssdev->panel.timings.x_res - 1) >> 8;
+	data[4] = (dssdev->panel.timings.x_res - 1) & 0xff;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 5);
+	if (ret)
+		goto error;
+
+	data[0] = EDISCO_CMD_SET_PAGE_ADDRESS;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	data[3] = (dssdev->panel.timings.y_res - 1) >> 8;
+	data[4] = (dssdev->panel.timings.y_res - 1) & 0xff;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 5);
+	if (ret)
+		goto error;
+
+	data[0] = 0x36;
+	data[1] = 0xD4;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 2);
+
+	printk(KERN_INFO "done EDISCO CTRL ENABLE\n");
+
+	return 0;
+error:
+	return -EINVAL;
+}
+
+static int dsi_mipi_cm_220_176_panel_enable(struct omap_dss_device *dssdev)
+{
+	u8 data[18];
+	int ret, disp_offset;
+
+	disp_offset = 0x32; /* An offset of 0x32 is used */
+
+	data[0] = EDISCO_CMD_EXIT_SLEEP_MODE;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 1);
+	if (ret)
+		goto error;
+
+	mdelay(10);
+
+	DBG("dsi_mipi_cm_220_176_panel_enable()\n");
+
+	data[0] = 0xF0;
+	data[1] = 0x5A;
+	data[2] = 0x5A;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 3);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF1;
+	data[1] = 0x5A;
+	data[2] = 0x5A;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 3);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF2;
+	data[1] = 0x16;
+	data[2] = 0xDC;
+	data[3] = 0x03;
+	data[4] = 0x28;
+	data[5] = 0x28;
+	data[6] = 0x10;
+	data[7] = 0x00;
+	data[8] = 0x60;
+	data[9] = 0xF8;
+	data[10] = 0x00;
+	data[11] = 0x07;
+	data[12] = 0x02;
+	data[13] = 0x00;
+	data[14] = 0x00;
+	data[15] = 0xDC;
+	data[16] = 0x28;
+	data[17] = 0x28;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 18);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF4;
+	data[1] = 0x0A;
+	data[2] = 0x00;
+	data[3] = 0x00;
+	data[4] = 0x00;
+	data[5] = 0x77;
+	data[6] = 0x7F;
+	data[7] = 0x07;
+	data[8] = 0x22;
+	data[9] = 0x2A;
+	data[10] = 0x43;
+	data[11] = 0x07;
+	data[12] = 0x2A;
+	data[13] = 0x43;
+	data[14] = 0x07;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 15);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF5;
+	data[1] = 0x00;
+	data[2] = 0x50;
+	data[3] = 0x28;
+	data[4] = 0x00;
+	data[5] = 0x00;
+	data[6] = 0x09;
+	data[7] = 0x00;
+	data[8] = 0x00;
+	data[9] = 0x00;
+	data[10] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 11);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF6;
+	data[1] = 0x07;
+	data[2] = 0x00;
+	data[3] = 0x07;
+	data[4] = 0x00;
+	data[5] = 0x0B;
+	data[6] = 0x04;
+	data[7] = 0x04;
+	data[8] = 0x04;
+	data[9] = 0x07;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 10);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF7;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	data[3] = 0x00;
+	data[4] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 5);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF8;
+	data[1] = 0x44;
+	data[2] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 3);
+	if (ret)
+		goto error;
+
+	/*R -Gamma*/
+	data[0] = 0xF9;
+	data[1] = 0x04;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 2);
+	if (ret)
+		goto error;
+
+	data[0] = 0xFA;
+	data[1] = 0x0F;
+	data[2] = 0x0F;
+	data[3] = 0x1E;
+	data[4] = 0x23;
+	data[5] = 0x26;
+	data[6] = 0x2D;
+	data[7] = 0x21;
+	data[8] = 0x2B;
+	data[9] = 0x33;
+	data[10] = 0x32;
+	data[11] = 0x2E;
+	data[12] = 0x00;
+	data[13] = 0x00;
+	data[14] = 0x00;
+	data[15] = 0x00;
+	data[16] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 17);
+	if (ret)
+		goto error;
+
+	data[0] = 0xFB;
+	data[1] = 0x0F;
+	data[2] = 0x0F;
+	data[3] = 0x1E;
+	data[4] = 0x23;
+	data[5] = 0x26;
+	data[6] = 0x2D;
+	data[7] = 0x21;
+	data[8] = 0x2B;
+	data[9] = 0x33;
+	data[10] = 0x32;
+	data[11] = 0x2E;
+	data[12] = 0x00;
+	data[13] = 0x00;
+	data[14] = 0x00;
+	data[15] = 0x00;
+	data[16] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 17);
+	if (ret)
+		goto error;
+
+	/*G -Gamma*/
+	data[0] = 0xF9;
+	data[1] = 0x02;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 2);
+	if (ret)
+		goto error;
+
+	data[0] = 0xFA;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	data[3] = 0x0A;
+	data[4] = 0x16;
+	data[5] = 0x1D;
+	data[6] = 0x27;
+	data[7] = 0x1C;
+	data[8] = 0x30;
+	data[9] = 0x38;
+	data[10] = 0x37;
+	data[11] = 0x32;
+	data[12] = 0x00;
+	data[13] = 0x00;
+	data[14] = 0x00;
+	data[15] = 0x00;
+	data[16] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 17);
+	if (ret)
+		goto error;
+
+	data[0] = 0xFB;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	data[3] = 0x0A;
+	data[4] = 0x16;
+	data[5] = 0x1D;
+	data[6] = 0x27;
+	data[7] = 0x1C;
+	data[8] = 0x30;
+	data[9] = 0x38;
+	data[10] = 0x37;
+	data[11] = 0x32;
+	data[12] = 0x00;
+	data[13] = 0x00;
+	data[14] = 0x00;
+	data[15] = 0x00;
+	data[16] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 17);
+	if (ret)
+		goto error;
+
+	/*B -Gamma*/
+	data[0] = 0xF9;
+	data[1] = 0x01;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 2);
+	if (ret)
+		goto error;
+
+	data[0] = 0xFA;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	data[3] = 0x13;
+	data[4] = 0x14;
+	data[5] = 0x19;
+	data[6] = 0x24;
+	data[7] = 0x1A;
+	data[8] = 0x31;
+	data[9] = 0x39;
+	data[10] = 0x38;
+	data[11] = 0x33;
+	data[12] = 0x00;
+	data[13] = 0x00;
+	data[14] = 0x00;
+	data[15] = 0x00;
+	data[16] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 17);
+	if (ret)
+		goto error;
+
+	data[0] = 0xFA;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	data[3] = 0x13;
+	data[4] = 0x14;
+	data[5] = 0x19;
+	data[6] = 0x24;
+	data[7] = 0x1A;
+	data[8] = 0x31;
+	data[9] = 0x39;
+	data[10] = 0x38;
+	data[11] = 0x33;
+	data[12] = 0x00;
+	data[13] = 0x00;
+	data[14] = 0x00;
+	data[15] = 0x00;
+	data[16] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 17);
+	if (ret)
+		goto error;
+
+	/*Disable the passwords*/
+	data[0] = 0xF0;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 3);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF1;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 3);
+	if (ret)
+		goto error;
+
+	data[0] = 0x36;
+	data[1] = 0x08;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 2);
+	if (ret)
+		goto error;
+
+	data[0] = 0x3A;
+	data[1] = 0x06;  /* this sets it to 18bpp */
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 2);
+	if (ret)
+		goto error;
+
+	/* set page, column address */
+	data[0] = EDISCO_CMD_SET_COLUMN_ADDRESS;
+	data[1] = 0x00;
+	data[2] = disp_offset;
+	data[3] = (dssdev->panel.timings.x_res - 1 + disp_offset) >> 8;
+	data[4] = (dssdev->panel.timings.x_res - 1 + disp_offset) & 0xff;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 5);
+	if (ret)
+		goto error;
+
+	data[0] = EDISCO_CMD_SET_PAGE_ADDRESS;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	data[3] = (dssdev->panel.timings.y_res - 1) >> 8;
+	data[4] = (dssdev->panel.timings.y_res - 1) & 0xff;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 5);
+	if (ret)
+		goto error;
+
+	return 0;
+error:
+	return -EINVAL;
+}
+
+
 
 static int dsi_mipi_280_vm_320_240_panel_enable(struct omap_dss_device *dssdev)
 {
@@ -847,18 +1263,14 @@ static int dsi_mipi_cm_480_854_panel_enable(struct omap_dss_device *dssdev)
 	 * D[0]=0 (Enhanced Image Correction OFF) */
 	data[0] = EDISCO_CMD_SET_BCKLGHT_PWM;
 	/* AUO displays require a different setting */
-        if (dssdev->panel.panel_id == MOT_DISP_370_MIPI_480_854_CM) {
-                data[1] = display_brightness();
-                printk("Set display to :%u\n", display_brightness());
-        } else {
-                data[1] = display_brightness();
-                printk("Set display to :%u\n", display_brightness());
-        }
+	if (dssdev->panel.panel_id == MOT_DISP_370_MIPI_480_854_CM)
+		data[1] = 0x09;
+	else
+		data[1] = 0x1f;
 	ret = mapphone_panel_lp_cmd_wrt_sync(true, 0x00,
 					data, 2,
 					EDISCO_CMD_SET_BCKLGHT_PWM, 1,
 					data[1], 0x1f);
-
 	if (ret)
 		printk(KERN_ERR "failed to send CABC/PWM \n");
 
@@ -1156,6 +1568,12 @@ static int mapphone_panel_enable(struct omap_dss_device *dssdev)
 	case MOT_DISP_280_MIPI_320_240_VM:
 		ret = dsi_mipi_280_vm_320_240_panel_enable(dssdev) ;
 		break;
+	case MOT_DISP_MIPI_240_320_CM:
+		ret = dsi_mipi_cm_240_320_panel_enable(dssdev);
+		break;
+	case MOT_DISP_MIPI_220_176_CM:
+		ret = dsi_mipi_cm_220_176_panel_enable(dssdev);
+		break;
 	default:
 		printk(KERN_ERR "unsupport panel =0x%lx \n",
 			dssdev->panel.panel_id);
@@ -1201,6 +1619,78 @@ static bool mapphone_panel_deep_sleep_mode(struct omap_dss_device *dssdev)
 	return ret;
 }
 
+static int mapphone_panel_refresh_rate(int ref_rate)
+{
+	unsigned reg_val = 0, val_porch = 0;
+	u8 data[18];
+	int ret;
+
+	printk(KERN_INFO "panel: refresh rate set to %d Hz\n", ref_rate);
+
+	if (ref_rate == 20) {
+		reg_val = 0xFF;
+		val_porch = 0xFF;
+	} else {
+		reg_val = 0xDC;
+		val_porch = 0x28;
+	}
+
+	data[0] = 0xF0;
+	data[1] = 0x5A;
+	data[2] = 0x5A;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 3);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF1;
+	data[1] = 0x5A;
+	data[2] = 0x5A;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 3);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF2;
+	data[1] = 0x16;
+	data[2] = reg_val;
+	data[3] = 0x03;
+	data[4] = val_porch;
+	data[5] = val_porch;
+	data[6] = 0x10;
+	data[7] = 0x00;
+	data[8] = 0x60;
+	data[9] = 0xF8;
+	data[10] = 0x00;
+	data[11] = 0x07;
+	data[12] = 0x02;
+	data[13] = 0x00;
+	data[14] = 0x00;
+	data[15] = 0xDC;
+	data[16] = 0x28;
+	data[17] = 0x28;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 18);
+	if (ret)
+		goto error;
+
+	/*Disable the passwords*/
+	data[0] = 0xF0;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 3);
+	if (ret)
+		goto error;
+
+	data[0] = 0xF1;
+	data[1] = 0x00;
+	data[2] = 0x00;
+	ret = dsi_vc_dcs_write(EDISCO_CMD_VC, data, 3);
+	if (ret)
+		goto error;
+
+	return 0;
+error:
+	return -EINVAL;
+}
+
 static void mapphone_panel_disable_local(struct omap_dss_device *dssdev)
 {
 	u8 data[1];
@@ -1216,14 +1706,19 @@ static void mapphone_panel_disable_local(struct omap_dss_device *dssdev)
 
 	msleep(100);
 
-	/*
-	 * mapphone_panel_deep_sleep_mode(0 will return false if the panel
-	 * doesn't support depp_sleep_mode
-	 */
-	if (mapphone_panel_deep_sleep_mode(dssdev) == false) {
-		if (dssdev->platform_disable)
-			dssdev->platform_disable(dssdev);
-	}
+	if (dsi_get_ulps_state() != OMAP_DSS_ULPS_STATE_ENTERING) {
+		/*
+		 * mapphone_panel_deep_sleep_mode(0 will return false if the
+		 * panel doesn't support depp_sleep_mode
+		 */
+		if (mapphone_panel_deep_sleep_mode(dssdev) == false) {
+			if (dssdev->platform_disable)
+				dssdev->platform_disable(dssdev);
+		}
+	} else
+		DBG("entering ULPS, do not do display reset in"
+			"mapphone_phone_panel_disable_local\n");
+
 }
 
 static void mapphone_panel_disable(struct omap_dss_device *dssdev)
@@ -1236,6 +1731,8 @@ static void mapphone_panel_disable(struct omap_dss_device *dssdev)
 	omap_panel_fod_dss_state(handle, 0);
 	if (omap_panel_fod_enabled(handle)) {
 		DBG("Freezing the last frame on the display\n");
+		/* Set Ref_Rate = 20hz */
+		mapphone_panel_refresh_rate(20);
 		return;
 	}
 
@@ -1249,6 +1746,9 @@ static void mapphone_panel_setup_update(struct omap_dss_device *dssdev,
 {
 	u8 data[5];
 	int ret;
+
+	if (dssdev->panel.panel_id == MOT_DISP_MIPI_220_176_CM)
+		x += 0x32;  /* An offset of 50 is required for P1 display */
 
 	/* set page, column address */
 	data[0] = EDISCO_CMD_SET_PAGE_ADDRESS;
@@ -1319,7 +1819,9 @@ static int mapphone_panel_get_hs_mode_timing(struct omap_dss_device *dssdev)
 
 	/* These values are required for the following spec panels */
 	if ((dssdev->panel.panel_id == MOT_DISP_430_MIPI_480_854_CM) ||
-		(dssdev->panel.panel_id == MOT_DISP_370_MIPI_480_854_CM)) {
+		(dssdev->panel.panel_id == MOT_DISP_370_MIPI_480_854_CM) ||
+		(dssdev->panel.panel_id == MOT_DISP_MIPI_240_320_CM) ||
+		(dssdev->panel.panel_id == MOT_DISP_MIPI_220_176_CM)) {
 		dssdev->phy.dsi.hs_timing.ths_prepare_ths_zero = 454;
 	}
 
@@ -1362,6 +1864,24 @@ static int mapphone_panel_rotate(struct omap_dss_device *display, u8 rotate)
 
 static int mapphone_panel_mirror(struct omap_dss_device *display, bool enable)
 {
+	return 0;
+}
+
+static int mapphone_panel_always_on_mode(struct omap_dss_device *display,
+		bool en)
+{
+	void *handle;
+	handle = ((struct mapphone_data *)display->data)->panel_handle;
+
+	DBG("mapphone_panel_always_on_mode %d \n", en);
+
+	if (en == 1)
+		omap_panel_fod_dss_state(handle, 1);
+	else {
+		omap_panel_fod_dss_state(handle, 0);
+		/* Set Refresh_Rate = 60hz */
+		mapphone_panel_refresh_rate(60);
+	}
 	return 0;
 }
 
@@ -1450,6 +1970,8 @@ static struct omap_dss_driver mapphone_panel_driver = {
 	.read_scl		= mapphone_panel_read_scl,
 	.sw_te_sup		= mapphone_panel_sw_te_sup,
 	.deep_sleep_mode	= mapphone_panel_deep_sleep_mode,
+	.always_on_mode_en	= mapphone_panel_always_on_mode,
+	.set_refresh_rate	= mapphone_panel_refresh_rate,
 
 	.driver = {
 		.name = "mapphone-panel",

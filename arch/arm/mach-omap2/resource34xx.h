@@ -30,6 +30,8 @@
 #include <plat/omap-pm.h>
 #include <plat/omap34xx.h>
 
+extern int omap_scale_voltage(u32 t_opp, u32 c_opp, u8 t_vsel, u8 c_vsel);
+
 /*
  * mpu_latency/core_latency are used to control the cpuidle C state.
  */

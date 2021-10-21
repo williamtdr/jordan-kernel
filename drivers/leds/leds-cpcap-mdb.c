@@ -122,17 +122,19 @@ static int cpcap_mdb_led_probe(struct platform_device *pdev)
 	}
 	platform_set_drvdata(pdev, info);
 
-	info->regulator = regulator_get(NULL, CPCAP_MDB_LED_REG);
-	if (IS_ERR(info->regulator)) {
-		pr_err("%s: Cannot get %s regulator\n", __func__,
-		       CPCAP_MDB_LED_REG);
-		ret = PTR_ERR(info->regulator);
-		goto err_info_missing;
+	if (mdb_led_config_data.regulator) {
+		info->regulator = regulator_get(NULL,
+				  mdb_led_config_data.regulator);
+		if (IS_ERR(info->regulator)) {
+			pr_err("%s: Cannot get %s regulator\n", __func__,
+			       mdb_led_config_data.regulator);
+			ret = PTR_ERR(info->regulator);
+			goto err_info_missing;
+		}
 
+		info->regulator_state = 1;
+		regulator_enable(info->regulator);
 	}
-
-	info->regulator_state = 0;
-
 	cpcap_status = cpcap_regacc_write(info->cpcap,
 					  CPCAP_REG_MDLC,
 					  mdb_led_config_data.init,

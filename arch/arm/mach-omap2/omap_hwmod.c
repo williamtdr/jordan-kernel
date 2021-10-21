@@ -93,8 +93,7 @@ static int _update_sysc_cache(struct omap_hwmod *oh)
 
 	oh->_sysc_cache = omap_hwmod_readl(oh, oh->sysconfig->sysc_offs);
 
-	if (!(oh->sysconfig->sysc_flags & SYSC_NO_CACHE))
-		oh->_int_flags |= _HWMOD_SYSCONFIG_LOADED;
+	oh->_int_flags |= _HWMOD_SYSCONFIG_LOADED;
 
 	return 0;
 }

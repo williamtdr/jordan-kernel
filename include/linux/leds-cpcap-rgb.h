@@ -25,7 +25,7 @@
 #define CPCAP_RGB_LED_BLUE_CLASS_NAME  "cpcap-rgb-led-blue"
 #define CPCAP_RGB_LED_DRV_NAME         "leds-cpcap-rgb"
 
-#define CPCAP_RGB_LED_REG "sw5"
+#define CPCAP_RGB_LED_REG NULL
 
 #define CPCAP_RGB_RED_LED      0x01
 #define CPCAP_RGB_GREEN_LED    0x02
@@ -33,16 +33,18 @@
 
 #define CPCAP_RGB_ON_OFF_MASK  0x03FF
 
+#define CPCAP_RGB_LED_BLINK_MASK  0x0200
+
 #define CPCAP_RGB_LOW_LIMIT      51
 #define CPCAP_RGB_LOW_MED_LIMIT  104
 #define CPCAP_RGB_MEDIUM_LIMIT   155
 #define CPCAP_RGB_MED_HIGH_LIMIT 201
 
-#define CPCAP_RGB_LOW_VALUE      0x23
-#define CPCAP_RGB_LOW_MED_VALUE  0x23
-#define CPCAP_RGB_MEDIUM_VALUE   0x33
-#define CPCAP_RGB_MED_HIGH_VALUE 0x43
-#define CPCAP_RGB_HIGH_VALUE     0x53
+#define CPCAP_RGB_LOW_VALUE      0x13
+#define CPCAP_RGB_LOW_MED_VALUE  0x13
+#define CPCAP_RGB_MEDIUM_VALUE   0x23
+#define CPCAP_RGB_MED_HIGH_VALUE 0x23
+#define CPCAP_RGB_HIGH_VALUE     0x33
 
 #define CPCAP_RGB_OFF_1        0x0001
 #define CPCAP_RGB_OFF_2        0x0000
@@ -52,6 +54,7 @@ struct cpcap_rgb_led_config_data {
 	bool green_enable;
 	bool blue_enable;
 	bool blink_enable;
+	short blink_rate_enable;
 	char class_name_red[CPCAP_RGB_LED_CLASS_NAME_SIZE];
 	char class_name_green[CPCAP_RGB_LED_CLASS_NAME_SIZE];
 	char class_name_blue[CPCAP_RGB_LED_CLASS_NAME_SIZE];

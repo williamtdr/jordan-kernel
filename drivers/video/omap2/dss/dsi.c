@@ -32,9 +32,11 @@
 #include <linux/regulator/consumer.h>
 #include <linux/kthread.h>
 #include <linux/wait.h>
+#include <linux/wakelock.h>
 
 #include <plat/display.h>
 #include <plat/clock.h>
+#include <plat/omap-pm.h>
 
 #include "dss.h"
 
@@ -173,6 +175,24 @@ struct dsi_reg { u16 idx; };
 #define DSI_CIO_IRQ_ERRCONTENTIONLP1_3	(1 << 25)
 #define DSI_CIO_IRQ_ULPSACTIVENOT_ALL0	(1 << 30)
 #define DSI_CIO_IRQ_ULPSACTIVENOT_ALL1	(1 << 31)
+#define DSI_CIO_IRQ_ERROR_MASK \
+		(DSI_CIO_IRQ_ERRSYNCESC1 | DSI_CIO_IRQ_ERRSYNCESC2 | \
+		DSI_CIO_IRQ_ERRSYNCESC3 | DSI_CIO_IRQ_ERRESC1 | \
+		DSI_CIO_IRQ_ERRESC2 | DSI_CIO_IRQ_ERRESC3 | \
+		DSI_CIO_IRQ_ERRCONTROL1 | DSI_CIO_IRQ_ERRCONTROL2 |\
+		DSI_CIO_IRQ_ERRCONTROL3 | \
+		DSI_CIO_IRQ_ERRCONTENTIONLP0_1 | \
+		DSI_CIO_IRQ_ERRCONTENTIONLP1_1 | \
+		DSI_CIO_IRQ_ERRCONTENTIONLP0_2 | \
+		DSI_CIO_IRQ_ERRCONTENTIONLP1_2 | \
+		DSI_CIO_IRQ_ERRCONTENTIONLP0_3 | \
+		DSI_CIO_IRQ_ERRCONTENTIONLP1_3)
+
+#define DSI_CIO_IRQ_ULPS_ON_STATUS \
+		(DSI_CIO_IRQ_STATEULPS1 | \
+		DSI_CIO_IRQ_STATEULPS2 | \
+		DSI_CIO_IRQ_STATEULPS3 | \
+		DSI_CIO_IRQ_ULPSACTIVENOT_ALL0)
 
 #define DSI_DT_DCS_SHORT_WRITE_0	0x05
 #define DSI_DT_DCS_SHORT_WRITE_1	0x15
@@ -255,6 +275,7 @@ static struct
 	bool use_ext_te;
 	bool te_trigger;
 	bool sw_te_sup;
+	bool always_on_mode_en;
 
 	struct hrtimer hrtimer;
 
@@ -283,12 +304,16 @@ static struct
 		bool enabled;
 		bool recovering;
 	} error_recovery;
+	enum omap_ulps_state  ulps_state;
 } dsi;
 
 #ifdef DEBUG
 static unsigned int dsi_perf;
 module_param_named(dsi_perf, dsi_perf, bool, 0644);
 #endif
+
+static int dsi_enter_ulps(struct omap_dss_device *dssdev);
+static int dsi_poll_ulps_irq_status(void);
 
 static inline void dsi_write_reg(const struct dsi_reg idx, u32 val)
 {
@@ -307,6 +332,11 @@ void dsi_save_context(void)
 
 void dsi_restore_context(void)
 {
+}
+
+enum omap_ulps_state dsi_get_ulps_state(void)
+{
+	return dsi.ulps_state;
 }
 
 void dsi_bus_lock(void)
@@ -551,6 +581,24 @@ static void schedule_error_recovery(void)
 		schedule_work(&dsi.error_recovery.work);
 }
 
+static int dsi_set_always_on_mode(struct omap_dss_device *dssdev,
+		bool en_always_on)
+{
+	DSSDBG("Always_On_Mode: dsi_set_always_on_mode %d \n", en_always_on);
+
+	dsi_bus_lock();
+	dsi.always_on_mode_en = en_always_on;
+	dssdev->driver->always_on_mode_en(dssdev, en_always_on);
+	dsi_bus_unlock();
+
+	return 0;
+}
+
+int dsi_get_always_on_mode(void)
+{
+	return dsi.always_on_mode_en && has_wake_lock(WAKE_LOCK_OFFMODE);
+}
+
 /* called from dss */
 void dsi_irq_handler(void)
 {
@@ -665,8 +713,8 @@ static void _dsi_initialize_irq(void)
 	/* XXX zonda responds incorrectly, causing control error:
 	   Exit from LP-ESC mode to LP11 uses wrong transition states on the
 	   data lines LP0 and LN0. */
-	dsi_write_reg(DSI_COMPLEXIO_IRQ_ENABLE,
-			-1 & (~DSI_CIO_IRQ_ERRCONTROL2));
+	l = DSI_CIO_IRQ_ERROR_MASK;
+	dsi_write_reg(DSI_COMPLEXIO_IRQ_ENABLE, l);
 }
 
 static u32 dsi_get_errors(void)
@@ -1066,6 +1114,10 @@ int dsi_pll_set_clock_div(struct dsi_clock_info *cinfo)
 	int f;
 
 	DSSDBGF();
+
+	/* Clear off DSI_PLL_CONF1 and DSI_PLL_CONF2 */
+	dsi_write_reg(DSI_PLL_CONFIGURATION1, 0);
+	dsi_write_reg(DSI_PLL_CONFIGURATION2, 0);
 
 	dsi.current_cinfo.fint = cinfo->fint;
 	dsi.current_cinfo.clkin4ddr = cinfo->clkin4ddr;
@@ -1600,6 +1652,8 @@ static int dsi_complexio_init(struct omap_dss_device *dssdev)
 	REG_FLD_MOD(DSI_CLK_CTRL, 1, 20, 20); /* LP_CLK_ENABLE */
 	dsi_if_enable(1);
 	dsi_if_enable(0);
+
+	dsi.ulps_state = OMAP_DSS_ULPS_STATE_OFF;
 
 	DSSDBG("CIO init done\n");
 err:
@@ -3431,6 +3485,17 @@ static int dsi_display_init_dispc(struct omap_dss_device *dssdev)
 	return 0;
 }
 
+static void dsi_display_save_dispc(void)
+{
+	dispc_save_off_context();
+}
+
+static void dsi_display_restore_dispc(void)
+{
+	DSSDBG("\nDSI: Restore DISPC Registers");
+	dispc_restore_off_context();
+}
+
 static void dsi_display_uninit_dispc(struct omap_dss_device *dssdev)
 {
 	omap_dispc_unregister_isr(dsi_framedone_irq_callback, NULL,
@@ -3530,8 +3595,14 @@ static int dsi_display_init_dsi(struct omap_dss_device *dssdev)
 	dsi_if_enable(1);
 	dsi_force_tx_stop_mode_io();
 
-	if (dssdev->driver->enable) {
+	/* Enable panel, when TAO off or offmode hit/fail */
+	if (dssdev->driver->enable && (!dsi_get_always_on_mode() ||
+		omap3_pm_did_hit_off_mode() || omap3_pm_did_off_mode_fail())) {
 		r = dssdev->driver->enable(dssdev);
+		if (r)
+			goto err4;
+	} else if (dssdev->driver->set_refresh_rate) {
+		r = dssdev->driver->set_refresh_rate(60);
 		if (r)
 			goto err4;
 	}
@@ -3555,8 +3626,45 @@ err0:
 
 static void dsi_display_uninit_dsi(struct omap_dss_device *dssdev)
 {
+	int status = 0;
+
+	if (dssdev->phy.dsi.ulps_enabled) {
+		/*  If ULPS feature is enabled, the display reset should not be
+		done in driver->disable().It should be done after the lanes
+		have entered ULPS state.In the following statement, a ulps
+		state variable is used to indicate driver->disable() code
+		not to do display reset */
+		dsi.ulps_state = OMAP_DSS_ULPS_STATE_ENTERING;
+	}
+
 	if (dssdev->driver->disable)
 		dssdev->driver->disable(dssdev);
+
+	if (dssdev->phy.dsi.ulps_enabled) {
+		dsi_vc_enable_hs(DSI_CMD_VC, 0);
+		dsi_vc_enable_hs(DSI_VIDEO_VC, 0);
+		dsi_vc_enable(DSI_CMD_VC, 0);
+		dsi_vc_enable(DSI_VIDEO_VC, 0);
+
+		DSSDBG(" Go through the sequence to enter ULPS\n");
+		if (0 != dsi_enter_ulps(dssdev)) {
+			/* poll for ulps status of lanes */
+			status = dsi_poll_ulps_irq_status();
+			DSSDBG(" CIO Intr status  = 0x%x \n", status);
+		}
+
+		if (status & DSI_CIO_IRQ_ULPSACTIVENOT_ALL0)
+			/* all lanes in ULPS */
+			dsi.ulps_state = OMAP_DSS_ULPS_STATE_LANES_IN_ULPS_ALL;
+		else if (status &  DSI_CIO_IRQ_ULPS_ON_STATUS)
+			/* some lanes in ULPS */
+			dsi.ulps_state = OMAP_DSS_ULPS_STATE_LANES_IN_ULPS_PART;
+		else /* no lane in ULPS */
+			dsi.ulps_state = OMAP_DSS_ULPS_STATE_OFF;
+
+		if (dssdev->platform_disable && !dsi_get_always_on_mode())
+			dssdev->platform_disable(dssdev);
+	}
 
 	dss_select_clk_source(false, false);
 	dsi_complexio_uninit();
@@ -3626,7 +3734,7 @@ static int dsi_display_enable(struct omap_dss_device *dssdev)
 
 	dssdev->state = OMAP_DSS_DISPLAY_ACTIVE;
 
-	dsi.use_ext_te = dssdev->phy.dsi.ext_te;
+	/*dsi.use_ext_te = dssdev->phy.dsi.ext_te;*/
 	r = dsi_set_te(dssdev, dsi.te_enabled);
 	if (r)
 		goto err4;
@@ -3712,6 +3820,8 @@ static int dsi_do_display_suspend(struct omap_dss_device *dssdev)
 	enable_clocks(1);
 	dsi_enable_pll_clock(1);
 
+	dsi_display_save_dispc();
+
 	dsi_display_uninit_dispc(dssdev);
 
 	dsi_display_uninit_dsi(dssdev);
@@ -3740,7 +3850,7 @@ static int dsi_display_suspend(struct omap_dss_device *dssdev)
 
 static int dsi_do_display_resume(struct omap_dss_device *dssdev)
 {
-	int r;
+	int r = 0;
 
 	DSSDBG("dsi_do_display_resume\n");
 
@@ -3762,6 +3872,8 @@ static int dsi_do_display_resume(struct omap_dss_device *dssdev)
 	r = dsi_display_init_dispc(dssdev);
 	if (r)
 		goto err1;
+
+	dsi_display_restore_dispc();
 
 	r = dsi_display_init_dsi(dssdev);
 	if (r)
@@ -3939,6 +4051,7 @@ static int dsi_display_enable_te(struct omap_dss_device *dssdev, bool enable)
 	enable_clocks(1);
 	dsi_enable_pll_clock(1);
 
+	enable = false;
 	dsi.te_enabled = enable;
 
 	if (dssdev->state != OMAP_DSS_DISPLAY_ACTIVE)
@@ -4124,6 +4237,8 @@ int dsi_init_display(struct omap_dss_device *dssdev)
 
 	dssdev->run_test = dsi_display_run_test;
 	dssdev->memory_read = dsi_display_memory_read;
+	dssdev->set_always_on_mode = dsi_set_always_on_mode;
+	dssdev->get_always_on_mode = dsi_get_always_on_mode;
 
 	/* XXX these should be figured out dynamically */
 	dssdev->caps = OMAP_DSS_DISPLAY_CAP_MANUAL_UPDATE |
@@ -4286,4 +4401,171 @@ void dsi_exit(void)
 	iounmap(dsi.base);
 
 	DSSDBG("omap_dsi_exit\n");
+}
+
+
+/*This function implements the procedure for the lanes to enter ULPS state.
+ * Returns the number of lanes that successfully completed the procedure
+ * to enter ULPS.The lanes actually entered ULPS can be known from
+ * DSI_COMPLEXIO_IRQSTATUS register */
+static int  dsi_enter_ulps(struct omap_dss_device *dssdev)
+{
+	int num_lanes_entering_ulps = 0;
+	bool lp_busy_reset = false;
+
+	int clk_lane   = dssdev->phy.dsi.clk_lane;
+	int data1_lane = dssdev->phy.dsi.data1_lane;
+	int data2_lane = dssdev->phy.dsi.data2_lane;
+
+	/* enter ULPS for clock lane */
+	/* Wait for DSS.DSI_COMPLEXIO_CFG2[16] HS_BUSY to be reset to 0 */
+	if (wait_for_bit_change(DSI_COMPLEXIO_CFG2, 16, 0) == 0) {
+		DSSDBG("HS_BUSY is reset to 0\n");
+	} else {
+		DSSERR("cannot enter ULPS for clock and"
+		" data lanes when HS BUSY=1\n");
+		return 0 ;
+	}
+
+	/* Wait for DSS.DSI_COMPLEXIO_CFG2[17] LP_BUSY to be reset to 0 */
+	if (wait_for_bit_change(DSI_COMPLEXIO_CFG2, 17, 0) == 0) {
+		lp_busy_reset = true;
+		DSSDBG("LP_BUSY is reset to 0 \n");
+	} else {
+		DSSERR("cannot enter ULPS for clock and"
+		" data on lane1 when LP BUSY = 1 \n");
+	}
+
+	if (lp_busy_reset == true) {
+		/* ensure that DSS.DSI_CLK_CTRL[13] DDR_CLK_ALWAYS_ON
+		 * bit is 0 */
+		if (wait_for_bit_change(DSI_CLK_CTRL, 13, 0) == 0) {
+			DSSDBG("DDR_CLK_ALWAYS_ON bit is 0 \n");
+			/* TxUlpsClk state should change from inactive
+			   to active by setting
+			   DSS.DSI_COMPLEXIO_CFG2LANEx_ULPS_SIG2
+			   bit to 1*/
+			/* bit numbers in
+			   DSI_COMPLEXIO_CFG2LANEx_ULPS_SIG2 for
+			   lanes 1,2,3 are 5,6,7 repectively.
+			   So bit num =4+lane_num */
+
+			REG_FLD_MOD(DSI_COMPLEXIO_CFG2 , 1 ,
+				(4+clk_lane) , (4+clk_lane));
+			if (wait_for_bit_change(DSI_COMPLEXIO_CFG2 ,
+				(4+clk_lane) , 1) == 1) {
+				num_lanes_entering_ulps++;
+				DSSDBG("entered ULPS for clock in lane %d \n" ,
+					   clk_lane);
+			} else {
+				DSSERR("cannot enter ULPS for clock: changing"
+				"TxUlpsClk inactive to active failed\n");
+			}
+
+		} else {
+			DSSERR("cannot enter ULPS for clock when"
+					"DDR_CLK_ALWAYS_ON bit is = 1 \n");
+		}
+
+	}
+
+	/* wait for video mode not active */
+	if ((wait_for_bit_change(DSI_VC_CTRL(DSI_VIDEO_VC), 4, 0) != 0) ||
+		(wait_for_bit_change(DSI_VC_CTRL(DSI_CMD_VC), 4, 0) != 0)) {
+		DSSERR("cannot enter ULPS for data"
+			   "when video mode is active \n");
+		return num_lanes_entering_ulps;
+	}
+	/* check if video VC mode_speed not high speed */
+	if (wait_for_bit_change(DSI_VC_CTRL(DSI_VIDEO_VC), 9, 0) != 0) {
+		DSSDBG("video VC mode_speed is High speed \n");
+		/* video VC is in HS mode. Check if its TX FIFO is empty */
+		if (wait_for_bit_change(DSI_VC_CTRL(DSI_VIDEO_VC), 5, 0) != 0) {
+			DSSERR("Video VC in HS mode,"
+				  "cannot enter ULPS for data \n");
+			return num_lanes_entering_ulps;
+		}
+	}
+	/* check if cmd VC mode_speed not high speed */
+	if (wait_for_bit_change(DSI_VC_CTRL(DSI_CMD_VC), 9, 0) != 0) {
+		/* cmd VC is in HS mode. Check if its TX FIFO is empty */
+		if (wait_for_bit_change(DSI_VC_CTRL(DSI_CMD_VC), 5, 0) != 0) {
+			DSSERR("Cmd VC in HS mode,"
+				  "cannot enter ULPS for data \n");
+			return num_lanes_entering_ulps;
+		}
+	}
+
+	if (lp_busy_reset == false) {
+		if (data1_lane == 1) {
+			data1_lane = -1;
+			DSSERR("cannot enter ULPS for data1 lane"
+				  "(in lane 1)when LP BUSY=1\n");
+		} else if (data2_lane == 1) {
+			data2_lane = -1;
+			DSSERR("cannot enter ULPS for data2 lane"
+				   "(in lane 1)when LP BUSY=1\n");
+		}
+
+	}
+	/* if dataX_lane = 0; that datalane is not used (X= 1,2)
+       if dataX_lane = -1; that data lane is in lane 1 and LP is busy */
+	if (data1_lane > 0) {
+		/* TxRequestEsc state should change from inactive to active by
+		settingthe DSS.DSI_COMPLEXIO_CFG2LANEx_ULPS_SIG2 bit to 1*/
+		/* bit numbers in DSI_COMPLEXIO_CFG2LANEx_ULPS_SIG2 for
+		lanes 1,2,3 are 5,6,7 repectively.So bit num =4+lane_num */
+		REG_FLD_MOD(DSI_COMPLEXIO_CFG2 , 1 ,
+			(4+data1_lane) , (4+data1_lane));
+		if (wait_for_bit_change(DSI_COMPLEXIO_CFG2 ,
+			(4+data1_lane) , 1) == 1) {
+			num_lanes_entering_ulps++;
+			DSSDBG("entered ULPS for data1_lane in lane %d \n",
+		data1_lane);
+		} else {
+			DSSERR("cannot enter ULPS for data1 lane ;"
+			" changing TxRequestEsc inactive -> active failed\n");
+		}
+	}
+
+	if (data2_lane > 0) {
+		/* TxRequestEsc state should change from inactive to active by
+		settingthe DSS.DSI_COMPLEXIO_CFG2LANEx_ULPS_SIG2 bit to 1*/
+		/* bit numbers in DSI_COMPLEXIO_CFG2LANEx_ULPS_SIG2 for
+		lanes 1,2,3 are 5,6,7 repectively.So bit num =4+lane_num */
+		REG_FLD_MOD(DSI_COMPLEXIO_CFG2 , 1 ,
+			(4+data2_lane) , (4+data2_lane));
+		if (wait_for_bit_change(DSI_COMPLEXIO_CFG2 ,
+			(4+data2_lane) , 1) == 1) {
+			num_lanes_entering_ulps++;
+			DSSDBG("entered ULPS for data2_lane in lane %d \n",
+		data2_lane);
+		} else {
+			DSSERR("cannot enter ULPS for data2 lane ;"
+			" changing TxRequestEsc inactive -> active failed\n");
+		}
+	}
+
+	return num_lanes_entering_ulps;
+}
+
+static int dsi_poll_ulps_irq_status(void)
+{
+	unsigned long tmo;
+	int cio_status;
+
+	tmo = jiffies + msecs_to_jiffies(10);
+	do {
+		cio_status = dsi_read_reg(DSI_COMPLEXIO_IRQ_STATUS);
+		if (cio_status & DSI_CIO_IRQ_ULPSACTIVENOT_ALL0)
+			break;
+	} while (time_before(jiffies , tmo));
+
+	/* Clear interrupt status bits of all lanes  */
+	dsi_write_reg(DSI_COMPLEXIO_IRQ_STATUS , DSI_CIO_IRQ_ULPS_ON_STATUS);
+	/* flush posted write */
+	dsi_read_reg(DSI_COMPLEXIO_IRQ_STATUS);
+	/* Some lanes,if not all, may have entered ULPS. Hence return the ULPS
+	*  interrrupt status even if ACTIVENOT_ALL0 status was not set */
+	return cio_status&DSI_CIO_IRQ_ULPS_ON_STATUS;
 }

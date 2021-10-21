@@ -73,8 +73,10 @@ struct input_absinfo {
 #define EVIOCGSW(len)		_IOC(_IOC_READ, 'E', 0x1b, len)		/* get all switch states */
 
 #define EVIOCGBIT(ev,len)	_IOC(_IOC_READ, 'E', 0x20 + ev, len)	/* get event bits */
-#define EVIOCGABS(abs)		_IOR('E', 0x40 + abs, struct input_absinfo)		/* get abs value/limits */
-#define EVIOCSABS(abs)		_IOW('E', 0xc0 + abs, struct input_absinfo)		/* set abs value/limits */
+/* get abs value/limits*/
+#define EVIOCGABS(abs)		_IOR('E', 0x80 + abs, struct input_absinfo)
+/* set abs value/limits*/
+#define EVIOCSABS(abs)		_IOW('E', 0x180 + abs, struct input_absinfo)
 
 #define EVIOCSFF		_IOC(_IOC_WRITE, 'E', 0x80, sizeof(struct ff_effect))	/* send a force effect to a force feedback device */
 #define EVIOCRMFF		_IOW('E', 0x81, int)			/* Erase a force effect */
@@ -376,6 +378,7 @@ struct input_absinfo {
 #define KEY_DISPLAY_OFF		245	/* display device to off state */
 
 #define KEY_WIMAX		246
+#define KEY_POWER_DOUBLE	247
 
 /* Range 248 - 255 is reserved for special needs of AT keyboard driver */
 
@@ -596,6 +599,7 @@ struct input_absinfo {
 #define KEY_NUMERIC_POUND	0x20b
 
 #define KEY_CAMERA_FOCUS	0x210
+#define KEY_POWER_SONG		0x220
 
 /* We avoid low common keys in module aliases so they don't get huge. */
 #define KEY_MIN_INTERESTING	KEY_MUTE
@@ -616,6 +620,11 @@ struct input_absinfo {
 #define REL_DIAL		0x07
 #define REL_WHEEL		0x08
 #define REL_MISC		0x09
+#define REL_DISTANCE            0x0A
+#define REL_STEPCOUNT           0x0B
+#define REL_SPEED               0x0C
+#define REL_ACTIVITY_TYPE       0x0D
+#define REL_ACTIVITY_LEVEL      0x0E
 #define REL_MAX			0x0f
 #define REL_CNT			(REL_MAX+1)
 
@@ -661,7 +670,26 @@ struct input_absinfo {
 #define ABS_MT_BLOB_ID		0x38	/* Group a set of packets as a blob */
 #define ABS_MT_TRACKING_ID	0x39	/* Unique ID of initiated contact */
 
-#define ABS_MAX			0x3f
+/* MSP (sensor) related events */
+#define ABS_STEPCOUNT           0x3a
+#define ABS_ACTIVITY            0x3b
+#define ABS_SPEED               0x3c
+#define ABS_CADENCE             0x3d
+#define ABS_ALTITUDE            0x3e
+#define ABS_PRESSURE_PASCAL     0x3f
+#define ABS_ASCENT              0x40
+#define ABS_DESCENT             0x41
+#define ABS_INCLINATION         0x42
+#define ABS_STEPLENGTH          0x43
+#define ABS_3D_TAP_TAP          0x44
+#define ABS_HEADING             0x45
+#define ABS_TEMPERATURE         0x46
+#define ABS_MSP_LATITUDE        0x47
+#define ABS_MSP_LONGITUDE       0x48
+#define ABS_MSP_HEADING         0x49
+#define ABS_MSP_ACCURACY        0x4a
+
+#define ABS_MAX			0x7f
 #define ABS_CNT			(ABS_MAX+1)
 
 /*

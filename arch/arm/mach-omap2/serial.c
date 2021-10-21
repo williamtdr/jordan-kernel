@@ -31,6 +31,7 @@
 #include <plat/control.h>
 #include <mach/gpio.h>
 #include <plat/omap-serial.h>
+#include <plat/board-mapphone-padconf.h>
 
 #include <asm/mach/serial_omap.h>
 
@@ -38,7 +39,19 @@
 #include "pm.h"
 #include "prm-regbits-34xx.h"
 
-#define DEFAULT_TIMEOUT HZ
+/*
+ * G2 hardcodes each UART to a different timeout.  This breaks the
+ * sleep_timeout sysinterface for globally setting and reading the UART
+ * timeouts
+ */
+#define UART0_TIMEOUT 20	/* G2 GPS: 156 ms */
+#define UART1_TIMEOUT 1		/* G2 BT:  0.8 ms (extended for open HCI seesion) */
+#define UART2_TIMEOUT HZ	/* G2 Console: 1 second */
+
+#define BT_UART       1
+
+//synapses
+//extern bool ll_is_asleep(void);
 
 struct omap_uart_state {
 	int num;
@@ -74,6 +87,28 @@ struct omap_uart_state {
 	u16 wer;
 #endif
 };
+
+#if defined(CONFIG_ARCH_OMAP3) && defined(CONFIG_PM)
+static ssize_t sleep_timeout_show(struct kobject *kobj,
+				  struct kobj_attribute *attr,
+				  char *buf);
+
+static ssize_t sleep_timeout_store(struct kobject *kobj,
+				   struct kobj_attribute *attr,
+				   const char *buf, size_t n);
+
+static struct kobj_attribute uart0_sleep_timeout_attr =
+	__ATTR(uart0_sleep_timeout, 0644, sleep_timeout_show,
+	       sleep_timeout_store);
+
+static struct kobj_attribute uart1_sleep_timeout_attr =
+	__ATTR(uart1_sleep_timeout, 0644, sleep_timeout_show,
+	       sleep_timeout_store);
+
+static struct kobj_attribute uart2_sleep_timeout_attr =
+	__ATTR(uart2_sleep_timeout, 0644, sleep_timeout_show,
+	       sleep_timeout_store);
+#endif
 
 static struct omap_uart_state omap_uart[OMAP_MAX_NR_PORTS];
 static LIST_HEAD(uart_list);
@@ -250,12 +285,6 @@ static void omap_uart_save_context(struct omap_uart_state *uart)
 	if (!enable_off_mode)
 		return;
 
-	/* FIXME
-	 * For omap3430 CORE/PERR OFF isn't temporarily supported,
-	 * so no need to save&restore the context of serial.
-	 */
-	if (cpu_is_omap34xx())
-		return;
 
 	lcr = serial_read_reg(p, UART_LCR);
 	serial_write_reg(p, UART_LCR, 0xBF);
@@ -281,12 +310,6 @@ static void omap_uart_restore_context(struct omap_uart_state *uart)
 	if (!uart->context_valid)
 		return;
 
-	/* FIXME
-	 * For omap3430 CORE/PERR OFF isn't temporarily supported,
-	 * so no need to save&restore the context of serial.
-	 */
-	if (cpu_is_omap34xx())
-		return;
 
 	uart->context_valid = 0;
 
@@ -348,7 +371,8 @@ static inline void omap_uart_enable_rtspullup(struct omap_uart_state *uart)
 		return;
 
 	uart->rts_padvalue = omap_ctrl_readw(uart->rts_padconf);
-	omap_ctrl_writew(0x18 | 0x7, uart->rts_padconf);
+	omap_ctrl_writew((uart->rts_padvalue & OMAP343X_OFFMODE_MASK) |
+					 (0x18|0x7), uart->rts_padconf);
 	uart->rts_override = 1;
 }
 
@@ -405,6 +429,18 @@ static void omap_uart_allow_sleep(struct omap_uart_state *uart)
 static void omap_uart_idle_timer(unsigned long data)
 {
 	struct omap_uart_state *uart = (struct omap_uart_state *)data;
+
+/* Check if BT session is active */
+	if (uart->num == BT_UART) {
+		//if (!ll_is_asleep()) {
+			/* sleep was NAK'd; restart timer */
+			if (uart->timeout)
+				mod_timer(&uart->timer, jiffies+uart->timeout);
+			else
+				del_timer(&uart->timer);
+			return;
+		//}
+	}
 
 	omap_uart_allow_sleep(uart);
 }
@@ -521,7 +557,9 @@ static irqreturn_t omap_uart_interrupt(int irq, void *dev_id)
 	return IRQ_NONE;
 }
 
-static u32 sleep_timeout = DEFAULT_TIMEOUT;
+static u32 uart0_sleep_timeout = UART0_TIMEOUT;
+static u32 uart1_sleep_timeout = UART1_TIMEOUT;
+static u32 uart2_sleep_timeout = UART2_TIMEOUT;
 
 static void omap_uart_rtspad_init(struct omap_uart_state *uart)
 {
@@ -529,13 +567,13 @@ static void omap_uart_rtspad_init(struct omap_uart_state *uart)
 		return;
 	switch(uart->num) {
 	case 0:
-		uart->rts_padconf = 0x17e;
+		uart->rts_padconf = 0;      /* no HW handhsake on UART1 */
 		break;
 	case 1:
 		uart->rts_padconf = 0x176;
 		break;
 	case 2:
-/*		uart->rts_padconf = 0x19c; */
+		uart->rts_padconf = 0;      /* no HW handshake on UART3 */
 		break;
 	default:
 		uart->rts_padconf = 0;
@@ -550,7 +588,13 @@ static void omap_uart_idle_init(struct omap_uart_state *uart)
 	int ret;
 
 	uart->can_sleep = 0;
-	uart->timeout = sleep_timeout;
+	if (uart->num == 0)
+		uart->timeout = uart0_sleep_timeout;
+	else if (uart->num == 1)
+		uart->timeout = uart1_sleep_timeout;
+	else if (uart->num == 2)
+		uart->timeout = uart2_sleep_timeout;
+
 	if (!uart->timeout)
 		_omap_uart_block_sleep(uart);
 	else {
@@ -619,14 +663,6 @@ static void omap_uart_idle_init(struct omap_uart_state *uart)
 		__raw_writel(v, uart->wk_en);
 	}
 
-	/* Ensure IOPAD wake-enables are set */
-	if (cpu_is_omap34xx() && uart->padconf) {
-		u16 v;
-
-		v = omap_ctrl_readw(uart->padconf);
-		v |= OMAP3_PADCONF_WAKEUPENABLE0;
-		omap_ctrl_writew(v, uart->padconf);
-	}
 
 	p->flags |= UPF_SHARE_IRQ;
 	ret = request_irq(p->irq, omap_uart_interrupt, IRQF_SHARED,
@@ -652,7 +688,14 @@ static ssize_t sleep_timeout_show(struct kobject *kobj,
 				  struct kobj_attribute *attr,
 				  char *buf)
 {
-	return sprintf(buf, "%u\n", sleep_timeout / HZ);
+	if (attr == &uart0_sleep_timeout_attr)
+		return sprintf(buf, "%u\n", omap_uart[0].timeout);
+	else if (attr == &uart1_sleep_timeout_attr)
+		return sprintf(buf, "%u\n", omap_uart[1].timeout);
+	else if (attr == &uart2_sleep_timeout_attr)
+		return sprintf(buf, "%u\n", omap_uart[2].timeout);
+
+	return sprintf(buf, "\n");
 }
 
 static ssize_t sleep_timeout_store(struct kobject *kobj,
@@ -666,20 +709,27 @@ static ssize_t sleep_timeout_store(struct kobject *kobj,
 		printk(KERN_ERR "sleep_timeout_store: Invalid value\n");
 		return -EINVAL;
 	}
-	sleep_timeout = value * HZ;
-	list_for_each_entry(uart, &uart_list, node) {
-		uart->timeout = sleep_timeout;
-		if (uart->timeout)
-			mod_timer(&uart->timer, jiffies + uart->timeout);
-		else
-			/* A zero value means disable timeout feature */
-			_omap_uart_block_sleep(uart);
+
+	if (attr == &uart0_sleep_timeout_attr)
+		uart = &omap_uart[0];
+	else if (attr == &uart1_sleep_timeout_attr)
+		uart = &omap_uart[1];
+	else if (attr == &uart2_sleep_timeout_attr)
+		uart = &omap_uart[2];
+	else {
+		printk(KERN_ERR "sleep_timeout_store: Invalid attribute\n");
+		return -EINVAL;
 	}
+
+	uart->timeout = value;
+	if (uart->timeout)
+		mod_timer(&uart->timer, jiffies + uart->timeout);
+	else
+		/* A zero value means disable timeout feature */
+		_omap_uart_block_sleep(uart);
+
 	return n;
 }
-
-static struct kobj_attribute sleep_timeout_attr =
-	__ATTR(sleep_timeout, 0644, sleep_timeout_show, sleep_timeout_store);
 
 #else
 static inline void omap_uart_idle_init(struct omap_uart_state *uart) {}
@@ -744,6 +794,11 @@ void __init omap_serial_init()
 			continue;
 		}
 
+		// synapses
+		if (157 & (1 << i))
+			p->wake_gpio_strobe = 0x00;
+		// end synapses
+
 		sprintf(name, "uart%d_ick", i+1);
 		uart->ick = clk_get(NULL, name);
 		if (IS_ERR(uart->ick)) {
@@ -783,14 +838,33 @@ static int __init omap_hs_init(void)
 		printk(KERN_ERR "Error adding uart devices (%d)\n", ret);
 		return ret;
 	}
-	ret = sysfs_create_file(&uart1_device.dev.kobj,
-				&sleep_timeout_attr.attr);
+	ret = sysfs_create_file(&uart_devices[0]->dev.kobj,
+				&uart0_sleep_timeout_attr.attr);
 	if (ret) {
 		printk(KERN_ERR
-		       "Error creating uart sleep_timeout sysfs file (%d)\n",
+		       "Error creating uart-0 sleep_timeout sysfs file (%d)\n",
 			ret);
 		return ret;
 	}
+
+	ret = sysfs_create_file(&uart_devices[1]->dev.kobj,
+				&uart1_sleep_timeout_attr.attr);
+	if (ret) {
+		printk(KERN_ERR
+		       "Error creating uart-1 sleep_timeout sysfs file (%d)\n",
+			ret);
+		return ret;
+	}
+
+	ret = sysfs_create_file(&uart_devices[2]->dev.kobj,
+				&uart2_sleep_timeout_attr.attr);
+	if (ret) {
+		printk(KERN_ERR
+		       "Error creating uart-2 sleep_timeout sysfs file (%d)\n",
+			ret);
+		return ret;
+	}
+
 	return ret;
 }
 arch_initcall(omap_hs_init);

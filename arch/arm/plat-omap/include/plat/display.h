@@ -202,6 +202,13 @@ enum omap_overlay_manager_caps {
 	OMAP_DSS_OVL_MGR_CAP_DISPC = 1 << 0,
 };
 
+enum omap_ulps_state {
+	OMAP_DSS_ULPS_STATE_OFF =  0,
+	OMAP_DSS_ULPS_STATE_ENTERING =  1,
+	OMAP_DSS_ULPS_STATE_LANES_IN_ULPS_PART =  2,
+	OMAP_DSS_ULPS_STATE_LANES_IN_ULPS_ALL =  3,
+};
+
 /* RFBI */
 
 struct rfbi_timings {
@@ -250,6 +257,7 @@ int dsi_vc_send_null(int channel);
 int dsi_vc_send_bta_sync(int channel);
 void dsi_disable_vid_vc_enable_cmd_vc(void);
 void dsi_disable_cmd_vc_enable_vid_vc(void);
+enum omap_ulps_state dsi_get_ulps_state(void);
 
 /* Board specific data */
 struct omap_dss_board_info {
@@ -462,6 +470,7 @@ struct omap_dss_device {
 			bool xfer_mode;
 			struct omap_dsi_video_timings vm_timing;
 			struct omap_dsi_hs_mode_timing hs_timing;
+			bool  ulps_enabled;
 		} dsi;
 
 		struct {
@@ -558,6 +567,9 @@ struct omap_dss_device {
 
 	int (*set_wss)(struct omap_dss_device *dssdev, u32 wss);
 	u32 (*get_wss)(struct omap_dss_device *dssdev);
+	int (*set_always_on_mode)(struct omap_dss_device *dssdev,
+		bool en_always_on);
+	int (*get_always_on_mode)(void);
 
 	/* platform specific  */
 	int (*platform_enable)(struct omap_dss_device *dssdev);
@@ -601,6 +613,8 @@ struct omap_dss_driver {
 	int (*get_scl_setting)(struct omap_dss_device *dssdev);
 	bool (*sw_te_sup)(struct omap_dss_device *dssdev);
 	bool (*deep_sleep_mode) (struct omap_dss_device *dssdev);
+	int (*always_on_mode_en)(struct omap_dss_device *display, bool enable);
+	int (*set_refresh_rate)(int ref_rate);
 };
 
 int omap_dss_register_driver(struct omap_dss_driver *);
@@ -633,6 +647,7 @@ int omap_dispc_wait_for_irq_timeout(u32 irqmask, unsigned long timeout);
 int omap_dispc_wait_for_irq_interruptible_timeout(u32 irqmask,
 		unsigned long timeout);
 void dispc_enable_spatial_dithering(bool enable);
+int dsi_get_always_on_mode(void);
 
 #define to_dss_driver(x) container_of((x), struct omap_dss_driver, driver)
 #define to_dss_device(x) container_of((x), struct omap_dss_device, dev)

@@ -72,7 +72,7 @@ extern int sched_expedited_torture_stats(char *page);
 /* Internal to kernel */
 extern void rcu_init(void);
 extern void rcu_scheduler_starting(void);
-#ifndef CONFIG_TINY_RCU
+#if !defined(CONFIG_TINY_RCU)
 extern int rcu_needs_cpu(int cpu);
 #else
 static inline int rcu_needs_cpu(int cpu) { return 0; }

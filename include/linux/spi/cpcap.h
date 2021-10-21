@@ -40,6 +40,7 @@
 /*
  * Tell the uC to setup the secondary standby bits for the regulators used.
  */
+#define CPCAP_HWCFG0_NONE               0x0000
 #define CPCAP_HWCFG0_SEC_STBY_SW1       0x0001
 #define CPCAP_HWCFG0_SEC_STBY_SW2       0x0002
 #define CPCAP_HWCFG0_SEC_STBY_SW3       0x0004
@@ -57,6 +58,7 @@
 #define CPCAP_HWCFG0_SEC_STBY_VRFREF    0x4000
 #define CPCAP_HWCFG0_SEC_STBY_VSDIO     0x8000
 
+#define CPCAP_HWCFG1_NONE               0x0000
 #define CPCAP_HWCFG1_SEC_STBY_VWLAN1    0x0001
 #define CPCAP_HWCFG1_SEC_STBY_VWLAN2    0x0002
 #define CPCAP_HWCFG1_SEC_STBY_VSIM      0x0004
@@ -544,6 +546,7 @@ struct cpcap_adc_ato {
 	unsigned short atox_out;
 	unsigned short adc_ps_factor_out;
 	unsigned short atox_ps_factor_out;
+	unsigned short ichrg_sense_res;
 };
 
 struct cpcap_display_led {
@@ -831,6 +834,8 @@ int cpcap_uc_stop(struct cpcap_device *cpcap, enum cpcap_macro macro);
 
 unsigned char cpcap_uc_status(struct cpcap_device *cpcap,
 			      enum cpcap_macro macro);
+
+int cpcap_disable_offmode_wakeups(bool disable);
 
 #ifdef CONFIG_PM_DBG_DRV
 void cpcap_irq_pm_dbg_suspend(void);

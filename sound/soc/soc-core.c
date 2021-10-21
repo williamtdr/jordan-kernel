@@ -646,6 +646,19 @@ static int soc_suspend(struct device *dev)
 	/* we're going to block userspace touching us until resume completes */
 	snd_power_change_state(codec->card, SNDRV_CTL_POWER_D3hot);
 
+	for (i = 0; i < card->num_links; i++) {
+		struct snd_soc_dai *dai = card->dai_link[i].codec_dai;
+		dev_info(codec->dev, "soc_suspend : DAI %s Is Active? %d\n",
+			dai->name, dai->active);
+		if (dai->active)
+			return 0;
+	}
+
+	dev_info(codec->dev, "soc_suspend : (Analog Audio Link) AAI"
+			 "Is Active? %d\n", codec->aai_active);
+	if (codec->aai_active)
+		return 0;
+
 	/* mute any active DAC's */
 	for (i = 0; i < card->num_links; i++) {
 		struct snd_soc_dai *dai = card->dai_link[i].codec_dai;

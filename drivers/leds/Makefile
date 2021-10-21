@@ -36,6 +36,7 @@ obj-$(CONFIG_LEDS_BU9847)               += leds-bu9847.o
 obj-$(CONFIG_LEDS_DAC124S085)		+= leds-dac124s085.o
 obj-$(CONFIG_KEYBOARD_ADP5588)          += leds-ld-adp5588-kpad.o
 obj-$(CONFIG_LEDS_LM3530)		+= led-lm3530.o
+obj-$(CONFIG_LEDS_LM3535)		+= leds-lm3535.o
 obj-$(CONFIG_LEDS_LM3554)		+= led-cpcap-lm3554.o
 obj-$(CONFIG_LEDS_LM3559)		+= led-cpcap-lm3559.o
 obj-$(CONFIG_LEDS_CPCAP)		+= leds-cpcap-adb.o \
@@ -43,7 +44,8 @@ obj-$(CONFIG_LEDS_CPCAP)		+= leds-cpcap-adb.o \
 					   leds-cpcap-kpb.o \
 					   leds-cpcap-mdb.o \
 					   leds-cpcap-rgb.o \
-					   leds-cpcap-usb.o
+					   leds-cpcap-chrg.o \
+					   leds-cpcap-als.o
 # LED Triggers
 obj-$(CONFIG_LEDS_TRIGGER_TIMER)	+= ledtrig-timer.o
 obj-$(CONFIG_LEDS_TRIGGER_IDE_DISK)	+= ledtrig-ide-disk.o

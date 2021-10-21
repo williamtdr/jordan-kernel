@@ -39,6 +39,7 @@ module_param_named(debug_mask, debug_mask, int, S_IRUGO | S_IWUSR | S_IWGRP);
 #define WAKE_LOCK_ACTIVE                 (1U << 9)
 #define WAKE_LOCK_AUTO_EXPIRE            (1U << 10)
 #define WAKE_LOCK_PREVENTING_SUSPEND     (1U << 11)
+#define WAKE_LOCK_PREVENTING_OFFMODE     (1U << 12)
 
 static DEFINE_SPINLOCK(list_lock);
 static LIST_HEAD(inactive_locks);
@@ -188,6 +189,24 @@ static void update_sleep_wait_stats_locked(int done)
 		else
 			lock->flags |= WAKE_LOCK_PREVENTING_SUSPEND;
 	}
+	// synapses
+	list_for_each_entry(lock, &active_wake_locks[WAKE_LOCK_OFFMODE], link) {
+		expired = get_expired_time(lock, &etime);
+		if (lock->flags & WAKE_LOCK_PREVENTING_OFFMODE) {
+			if (expired)
+				add = ktime_sub(etime, last_sleep_time_update);
+			else
+				add = elapsed;
+			lock->stat.prevent_offmode_time = ktime_add(
+				lock->stat.prevent_offmode_time, add);
+		}
+		if (done || expired)
+			lock->flags &= ~WAKE_LOCK_PREVENTING_OFFMODE;
+		else
+			lock->flags |= WAKE_LOCK_PREVENTING_OFFMODE;
+	}
+	// end synapses
+
 	last_sleep_time_update = now;
 }
 #endif

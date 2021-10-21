@@ -60,7 +60,7 @@ inline bool is_omap343x_padconf_register(uint16_t offset)
 	return 0;
 }
 
-static __initdata struct {
+static struct {
 	uint16_t offset;
 	uint16_t setting;
 } padconf_settings[] = {
@@ -1882,16 +1882,50 @@ void __init mapphone_padconf_init(void)
 					if (cpu_is_omap3430())
 						continue;
 			}
-#ifdef CONFIG_DEBUG_LL
-			if (addr == 0x480021AA)
-			{
-			continue;
+
+			/* Die-to-die IRQ must be left for OFFMODE to
+			   work when there is no modem */
+			if (cpu_is_omap3630() &&
+			    (padconf_settings[i].offset == 0x23A)) {
+				continue;
 			}
-#endif
+
+			if (val & OMAP343X_PADCONF_OFF_WAKEUP_ENABLED)
+				printk(KERN_INFO "Padconf at 0x%lx is "
+					"configured for WAKE ENABLED\n",
+					addr);
+
+			if (val & OMAP343X_PADCONF_OFFMODE_ENABLED)
+				printk(KERN_INFO "Padconf at 0x%lx is "
+					"configured for OFFMODE (0x%x)\n",
+					addr, val);
+
 			omap_writew(val, addr);
 		} else {
 			printk(KERN_ERR "padconf check failed, offset = 0x%04x\n",
 						padconf_settings[i].offset);
+		}
+	}
+
+	return;
+}
+
+void mapphone_padconf_print_wakeups(void)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(padconf_settings); i++) {
+		if (is_omap343x_padconf_register(padconf_settings[i].offset)) {
+			unsigned long addr = padconf_settings[i].offset
+			    + OMAP343X_CTRL_BASE;
+
+			unsigned short val = omap_readw(addr);
+			if (val & OMAP343X_PADCONF_OFF_WAKEUP_EVENT)
+				printk(KERN_INFO "Wakeup event on padconf "
+					"address 0x%lx (0x%x)\n", addr, val);
+		} else {
+			printk(KERN_ERR "padconf print wakeup failed, offset "
+				"= 0x%04x\n", padconf_settings[i].offset);
 		}
 	}
 

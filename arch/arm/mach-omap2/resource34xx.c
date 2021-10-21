@@ -26,11 +26,15 @@
 #include <plat/omap34xx.h>
 #include <plat/omap-pm.h>
 
+#ifdef CONFIG_OMAP_SMARTREFLEX
 #include "smartreflex.h"
+#endif
 #include "resource34xx.h"
 #include "pm.h"
 #include "cm.h"
 #include "cm-regbits-34xx.h"
+
+static DEFINE_SPINLOCK(dpll3_clock_lock);
 
 #ifndef CONFIG_CPU_IDLE
 #warning MPU latency constraints require CONFIG_CPU_IDLE to function!
@@ -569,3 +573,4 @@ int validate_freq(struct shared_resource *resp, u32 target_level)
 {
 	return 0;
 }
+

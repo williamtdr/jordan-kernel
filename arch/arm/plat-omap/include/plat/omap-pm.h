@@ -424,5 +424,13 @@ unsigned long omap_pm_cpu_get_freq(void);
  */
 int omap_pm_get_dev_context_loss_count(struct device *dev);
 
-
+/**
+ * omap_pm_suspend_opp - handle operating points for entering/exiting suspend
+ *
+ * for enter=1, the OPP will be locked at the maximum
+ * for enter=0, the OPP will be locked at the minimum
+ */
+void omap_pm_suspend_opp(int enter);
+extern int omap3_pm_did_hit_off_mode(void);
+extern int omap3_pm_did_off_mode_fail(void);
 #endif

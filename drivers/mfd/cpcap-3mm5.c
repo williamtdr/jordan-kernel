@@ -22,13 +22,34 @@
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
 #include <linux/switch.h>
+#include <linux/wakelock.h>
 #include <linux/workqueue.h>
+#include <mach/gpio.h>
 
 #include <linux/regulator/consumer.h>
 
 #include <linux/spi/cpcap.h>
 #include <linux/spi/cpcap-regbits.h>
 #include <linux/spi/spi.h>
+
+#include <sound/cs42l73.h>
+#include <sound/soc-dapm.h>
+
+#define NUM_KEYS 4
+#define VOLT_CUSHION 20
+#define HS_DET_B_GPIO	29
+
+struct volt_key {
+	short voltage;
+	int key;
+};
+
+static struct volt_key key_lut[NUM_KEYS] = {
+	{273, KEY_PLAYCD},
+	{381, KEY_VOLUMEUP},
+	{485, KEY_VOLUMEDOWN},
+	{586, KEY_POWER_SONG}
+};
 
 enum {
 	NO_DEVICE,
@@ -44,7 +65,24 @@ struct cpcap_3mm5_data {
 	unsigned char audio_low_pwr_det;
 	unsigned char audio_low_pwr_mac13;
 	struct delayed_work work;
+	struct delayed_work key_work;
+	struct workqueue_struct *hs_workqueue;
+	struct delayed_work hs_work;
+	int last_key;
+	struct wake_lock hs_work_wakelock;
 };
+
+#if 0
+/*Due to HW issues,send/end key may be detected while HS is inserted */
+/*Soln:After HS detection wait for some time before sending send/end key */
+static unsigned long hs_det_time; /* Time(tick) when headset was detected */
+#define SEND_KEY_TMO   4 /* Timeout in seconds before sending send/end key */
+#endif
+
+int headset_connected;
+int has_vol_controls; /* Indicates if connected headset has volume controls */
+struct cpcap_device *cpcap;
+#define HS_JACK_DELAY 500 /* Delay before detecting headset type */
 
 static ssize_t print_name(struct switch_dev *sdev, char *buf)
 {
@@ -89,87 +127,225 @@ static void send_key_event(struct cpcap_3mm5_data *data, unsigned int state)
 	}
 }
 
-static void hs_handler(enum cpcap_irqs irq, void *data)
+static irqreturn_t hs_handler(int irq, void *data)
 {
 	struct cpcap_3mm5_data *data_3mm5 = data;
-	int new_state = NO_DEVICE;
 
-	if (irq != CPCAP_IRQ_HS)
-		return;
+	wake_lock(&data_3mm5->hs_work_wakelock);
 
-	/* HS sense of 1 means no headset present, 0 means headset attached. */
-	if (cpcap_irq_sense(data_3mm5->cpcap, CPCAP_IRQ_HS, 1) == 1) {
-		cpcap_regacc_write(data_3mm5->cpcap, CPCAP_REG_TXI, 0,
-				   (CPCAP_BIT_MB_ON2 | CPCAP_BIT_PTT_CMP_EN));
-		cpcap_regacc_write(data_3mm5->cpcap, CPCAP_REG_RXOA, 0,
-				   CPCAP_BIT_ST_HS_CP_EN);
-		audio_low_power_set(data_3mm5, &data_3mm5->audio_low_pwr_det);
+	/* Handle interrupt immediately if detect a headset removal, else
+	 * delay on headset insertion*/
+	if (!gpio_get_value(HS_DET_B_GPIO))
+		queue_delayed_work(data_3mm5->hs_workqueue,
+			&data_3mm5->hs_work, msecs_to_jiffies(HS_JACK_DELAY));
+	else
+		queue_delayed_work(data_3mm5->hs_workqueue,
+			&data_3mm5->hs_work, 0);
 
-		cpcap_irq_mask(data_3mm5->cpcap, CPCAP_IRQ_MB2);
-		cpcap_irq_mask(data_3mm5->cpcap, CPCAP_IRQ_UC_PRIMACRO_5);
+	return IRQ_HANDLED;
+}
 
-		cpcap_irq_clear(data_3mm5->cpcap, CPCAP_IRQ_MB2);
-		cpcap_irq_clear(data_3mm5->cpcap, CPCAP_IRQ_UC_PRIMACRO_5);
+unsigned short read_mic_adc(struct cpcap_device *cpcap)
+{
+	unsigned short adc_value = 0;
+	unsigned short value = 0;
+	unsigned long timeout = jiffies + msecs_to_jiffies(50);
 
-		cpcap_irq_unmask(data_3mm5->cpcap, CPCAP_IRQ_HS);
+	cpcap_regacc_write(cpcap, CPCAP_REG_ADCC1,
+		(CPCAP_BIT_AD_SEL1 | CPCAP_BIT_ADEN),
+		(CPCAP_BIT_AD_SEL1 | CPCAP_BIT_RAND1 | CPCAP_BIT_RAND0 |
+			CPCAP_BIT_ADEN));
+	cpcap_regacc_write(cpcap, CPCAP_REG_ADCC2, CPCAP_BIT_ASC,
+		CPCAP_BIT_ASC);
 
-		send_key_event(data_3mm5, 0);
+	do {
+		schedule_timeout_uninterruptible(1);
+		cpcap_regacc_read(cpcap, CPCAP_REG_ADCC2, &value);
+	} while ((value & CPCAP_BIT_ASC) && time_before(jiffies, timeout));
 
-		cpcap_uc_stop(data_3mm5->cpcap, CPCAP_MACRO_5);
-	} else {
-		cpcap_regacc_write(data_3mm5->cpcap, CPCAP_REG_TXI,
-				   (CPCAP_BIT_MB_ON2 | CPCAP_BIT_PTT_CMP_EN),
-				   (CPCAP_BIT_MB_ON2 | CPCAP_BIT_PTT_CMP_EN));
-		cpcap_regacc_write(data_3mm5->cpcap, CPCAP_REG_RXOA,
-				   CPCAP_BIT_ST_HS_CP_EN,
-				   CPCAP_BIT_ST_HS_CP_EN);
-		audio_low_power_clear(data_3mm5, &data_3mm5->audio_low_pwr_det);
+	cpcap_regacc_read(cpcap, CPCAP_REG_ADCD7, (unsigned short *)&adc_value);
 
-		/* Give PTTS time to settle 10ms */
-		msleep(11);
+	return adc_value;
+}
 
-		if (cpcap_irq_sense(data_3mm5->cpcap, CPCAP_IRQ_PTT, 1) <= 0) {
-			/* Headset without mic and MFB is detected. (May also
-			 * be a headset with the MFB pressed.) */
-			new_state = HEADSET_WITHOUT_MIC;
-		} else
-			new_state = HEADSET_WITH_MIC;
+static void hs_gpio_work(struct work_struct *work)
+{
+	struct cpcap_3mm5_data *data_3mm5 =
+		container_of(work, struct cpcap_3mm5_data, hs_work.work);
+	int i;
+	unsigned short key_adc_value1, key_adc_value2;
+	u8 reg = 0;
 
-		cpcap_irq_clear(data_3mm5->cpcap, CPCAP_IRQ_MB2);
-		cpcap_irq_clear(data_3mm5->cpcap, CPCAP_IRQ_UC_PRIMACRO_5);
+	/* Reset headset state while detecting headset */
+	headset_connected = NO_DEVICE;
+	has_vol_controls = 0;
 
-		cpcap_irq_unmask(data_3mm5->cpcap, CPCAP_IRQ_HS);
-		cpcap_irq_unmask(data_3mm5->cpcap, CPCAP_IRQ_MB2);
-		cpcap_irq_unmask(data_3mm5->cpcap, CPCAP_IRQ_UC_PRIMACRO_5);
+	/* Check HS Detect GPIO five times to ensure no false removal signal */
+	for (i = 0; i < 5; i++)	{
+		msleep(10);
+		/* HS_DET_B_GPIO of 1 means no headset present,
+		   0 means headset attached. */
+		if (!gpio_get_value(HS_DET_B_GPIO)) {
+			/* Wait up to ten seconds for codec to be initialized */
+			int count = 100;
+			while (codec_suspended && count--)
+				msleep(100);
 
-		cpcap_uc_start(data_3mm5->cpcap, CPCAP_MACRO_5);
+			if (cs42l73_codec) {
+				/* Turn on CODEC */
+				cs42l73_codec->set_bias_level(cs42l73_codec,
+					SND_SOC_BIAS_PREPARE);
+				cs42l73_codec->set_bias_level(cs42l73_codec,
+					SND_SOC_BIAS_ON);
+
+				/* Turn on MIC2_BIAS */
+				reg = snd_soc_read(cs42l73_codec,
+					CS42L73_PWRCTL2);
+				snd_soc_write(cs42l73_codec, CS42L73_PWRCTL2,
+					reg & ~PDN_MIC2_BIAS);
+			}
+
+			msleep(100);
+			key_adc_value1 = read_mic_adc(data_3mm5->cpcap);
+			msleep(100);
+			key_adc_value2 = read_mic_adc(data_3mm5->cpcap);
+			/* Try for up to five seconds */
+			count = 50;
+			while ((abs(key_adc_value1 - key_adc_value2) > 1)
+					&& count--) {
+				key_adc_value1 = key_adc_value2;
+				msleep(100);
+				key_adc_value2 = read_mic_adc(data_3mm5->cpcap);
+			}
+
+			if (key_adc_value2 < 180) {
+				/* ADC value less than ~500 mV */
+				headset_connected = HEADSET_WITHOUT_MIC;
+				has_vol_controls = 0;
+			} else if (key_adc_value2 < 575) {
+				/* ADC value less than ~1.6 V */
+				headset_connected = HEADSET_WITH_MIC;
+				has_vol_controls = 0;
+			} else {
+				/* ADC value greater than ~1.6 V */
+				/* Assume has volume controls */
+				headset_connected = HEADSET_WITH_MIC;
+				has_vol_controls = 1;
+			}
+
+			dev_info(&data_3mm5->cpcap->spi->dev,
+				"Has volume controls: %d\n", has_vol_controls);
+
+			if (cs42l73_codec) {
+				if (headset_connected != HEADSET_WITH_MIC) {
+					/* Power down MIC2 Bias */
+					reg = snd_soc_read(cs42l73_codec,
+						CS42L73_PWRCTL2);
+					snd_soc_write(cs42l73_codec,
+						CS42L73_PWRCTL2,
+						reg | PDN_MIC2_BIAS);
+				}
+
+				/* Put CODEC in STANDBY */
+				cs42l73_codec->set_bias_level(cs42l73_codec,
+					SND_SOC_BIAS_PREPARE);
+				cs42l73_codec->set_bias_level(cs42l73_codec,
+					SND_SOC_BIAS_STANDBY);
+			}
+			break;
+		}
 	}
 
-	switch_set_state(&data_3mm5->sdev, new_state);
-	if (data_3mm5->cpcap->h2w_new_state)
-		data_3mm5->cpcap->h2w_new_state(new_state);
+	if (switch_get_state(&data_3mm5->sdev) != headset_connected) {
+		switch_set_state(&data_3mm5->sdev, headset_connected);
+		if (data_3mm5->cpcap->h2w_new_state)
+			data_3mm5->cpcap->h2w_new_state(headset_connected);
 
-	dev_info(&data_3mm5->cpcap->spi->dev, "New headset state: %d\n",
-		 new_state);
+		dev_info(&data_3mm5->cpcap->spi->dev, "New headset state: %d\n",
+			headset_connected);
+		if (NO_DEVICE == headset_connected) {
+			send_key_event(data_3mm5, 0);
+			// todo synapses
+			//cs42l73_clear_key_pressed();
+			// end todo synapses
+
+			if (cs42l73_codec) {
+				/* Turn on CODEC */
+				cs42l73_codec->set_bias_level(cs42l73_codec,
+					SND_SOC_BIAS_PREPARE);
+				cs42l73_codec->set_bias_level(cs42l73_codec,
+					SND_SOC_BIAS_ON);
+				/* Power down MIC2 Bias */
+				reg = snd_soc_read(cs42l73_codec,
+					CS42L73_PWRCTL2);
+				snd_soc_write(cs42l73_codec, CS42L73_PWRCTL2,
+					reg | PDN_MIC2_BIAS);
+				/* Put CODEC in STANDBY */
+				cs42l73_codec->set_bias_level(cs42l73_codec,
+					SND_SOC_BIAS_PREPARE);
+				cs42l73_codec->set_bias_level(cs42l73_codec,
+					SND_SOC_BIAS_STANDBY);
+			}
+
+#if 0
+		} else {
+			hs_det_time = jiffies;
+#endif
+		}
+	}
+
+	wake_unlock(&data_3mm5->hs_work_wakelock);
+}
+
+static int read_cpcap_key(struct cpcap_device *cpcap)
+{
+	unsigned short adc_value = 0;
+	unsigned short value = 0;
+	unsigned long timeout = jiffies + msecs_to_jiffies(50);
+	int i;
+
+	cpcap_regacc_write(cpcap, CPCAP_REG_ADCC1,
+		(CPCAP_BIT_AD_SEL1 | CPCAP_BIT_ADEN),
+		(CPCAP_BIT_AD_SEL1 | CPCAP_BIT_RAND1 | CPCAP_BIT_RAND0 |
+			CPCAP_BIT_ADEN));
+	cpcap_regacc_write(cpcap, CPCAP_REG_ADCC2, CPCAP_BIT_ASC,
+		CPCAP_BIT_ASC);
+
+	do {
+		schedule_timeout_uninterruptible(1);
+		cpcap_regacc_read(cpcap, CPCAP_REG_ADCC2, &value);
+	} while ((value & CPCAP_BIT_ASC) && time_before(jiffies, timeout));
+
+	cpcap_regacc_read(cpcap, CPCAP_REG_ADCD7, (unsigned short *)&adc_value);
+
+	for (i = 0; i < NUM_KEYS; i++) {
+		if (((key_lut[i].voltage - VOLT_CUSHION) < adc_value) &&
+			((key_lut[i].voltage + VOLT_CUSHION) > adc_value))
+			break;
+	}
+
+	if (i != NUM_KEYS)
+		return key_lut[i].key;
+	else
+		return KEY_RESERVED;
 }
 
 static void key_handler(enum cpcap_irqs irq, void *data)
 {
 	struct cpcap_3mm5_data *data_3mm5 = data;
+	int key1, key2;
 
 	if ((irq != CPCAP_IRQ_MB2) && (irq != CPCAP_IRQ_UC_PRIMACRO_5))
 		return;
 
-	if ((cpcap_irq_sense(data_3mm5->cpcap, CPCAP_IRQ_HS, 1) == 1) ||
-	    (switch_get_state(&data_3mm5->sdev) != HEADSET_WITH_MIC)) {
-		hs_handler(CPCAP_IRQ_HS, data_3mm5);
-		return;
-	}
-
 	if ((cpcap_irq_sense(data_3mm5->cpcap, CPCAP_IRQ_MB2, 0) == 0) ||
 	    (cpcap_irq_sense(data_3mm5->cpcap, CPCAP_IRQ_PTT, 0) == 0)) {
-		send_key_event(data_3mm5, 1);
 
+#if 0 /* Disable Media key for Gault */
+		/* once HS is detected, wait for some time before sending send
+		   key */
+		if (time_before((hs_det_time+SEND_KEY_TMO*HZ), jiffies))
+			send_key_event(data_3mm5, 1);
 		/* If macro not available, only short presses are supported */
 		if (!cpcap_uc_status(data_3mm5->cpcap, CPCAP_MACRO_5)) {
 			send_key_event(data_3mm5, 0);
@@ -177,11 +353,54 @@ static void key_handler(enum cpcap_irqs irq, void *data)
 			/* Attempt to restart the macro for next time. */
 			cpcap_uc_start(data_3mm5->cpcap, CPCAP_MACRO_5);
 		}
-	} else
+#endif
+
+		if (data_3mm5->last_key != KEY_RESERVED) {
+			cancel_delayed_work_sync(&data_3mm5->key_work);
+			cpcap_broadcast_key_event(data_3mm5->cpcap,
+				data_3mm5->last_key, 0);
+			data_3mm5->last_key = KEY_RESERVED;
+		}
+	} else {
+#if 0 /* Disable Media key for Gault */
 		send_key_event(data_3mm5, 0);
+#endif
+
+		mdelay(10);
+		key1 = read_cpcap_key(data_3mm5->cpcap);
+		mdelay(5);
+		key2 = read_cpcap_key(data_3mm5->cpcap);
+
+		if ((key1 != KEY_RESERVED) && (key1 == key2)) {
+			cancel_delayed_work_sync(&data_3mm5->key_work);
+			data_3mm5->last_key = key1;
+			cpcap_broadcast_key_event(data_3mm5->cpcap,
+				data_3mm5->last_key, 1);
+			schedule_delayed_work(&data_3mm5->key_work,
+				msecs_to_jiffies(100));
+		} else if (data_3mm5->last_key != KEY_RESERVED) {
+			cancel_delayed_work_sync(&data_3mm5->key_work);
+			cpcap_broadcast_key_event(
+				data_3mm5->cpcap, data_3mm5->last_key, 0);
+			data_3mm5->last_key = KEY_RESERVED;
+		}
+	}
 
 	cpcap_irq_unmask(data_3mm5->cpcap, CPCAP_IRQ_MB2);
 	cpcap_irq_unmask(data_3mm5->cpcap, CPCAP_IRQ_UC_PRIMACRO_5);
+}
+
+static void key_release_work(struct work_struct *work)
+{
+	struct cpcap_3mm5_data *data_3mm5 =
+		container_of(work, struct cpcap_3mm5_data, key_work.work);
+
+	if ((data_3mm5->last_key != KEY_RESERVED) &&
+		(read_cpcap_key(data_3mm5->cpcap) != data_3mm5->last_key)) {
+		cpcap_broadcast_key_event(data_3mm5->cpcap,
+			data_3mm5->last_key, 0);
+		data_3mm5->last_key = KEY_RESERVED;
+	}
 }
 
 static void mac13_work(struct work_struct *work)
@@ -207,17 +426,11 @@ static void mac13_handler(enum cpcap_irqs irq, void *data)
 #ifdef CONFIG_PM
 static int cpcap_3mm5_suspend(struct platform_device *dev, pm_message_t state)
 {
-	struct cpcap_3mm5_data *data_3mm5 = platform_get_drvdata(dev);
-	if (switch_get_state(&data_3mm5->sdev) == HEADSET_WITHOUT_MIC)
-		audio_low_power_set(data_3mm5, &data_3mm5->audio_low_pwr_det);
 	return 0;
 }
 
 static int cpcap_3mm5_resume(struct platform_device *dev)
 {
-	struct cpcap_3mm5_data *data_3mm5 = platform_get_drvdata(dev);
-	if (switch_get_state(&data_3mm5->sdev) == HEADSET_WITHOUT_MIC)
-		audio_low_power_clear(data_3mm5, &data_3mm5->audio_low_pwr_det);
 	return 0;
 }
 #endif
@@ -237,6 +450,7 @@ static int __init cpcap_3mm5_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	data->cpcap = pdev->dev.platform_data;
+	cpcap = data->cpcap;
 	data->audio_low_pwr_det = 1;
 	data->audio_low_pwr_mac13 = 1;
 	data->sdev.name = "h2w";
@@ -244,6 +458,8 @@ static int __init cpcap_3mm5_probe(struct platform_device *pdev)
 	switch_dev_register(&data->sdev);
 	INIT_DELAYED_WORK(&data->work, mac13_work);
 	platform_set_drvdata(pdev, data);
+	data->last_key = KEY_RESERVED;
+	INIT_DELAYED_WORK(&data->key_work, key_release_work);
 
 	data->regulator = regulator_get(NULL, "vaudio");
 	if (IS_ERR(data->regulator)) {
@@ -254,17 +470,35 @@ static int __init cpcap_3mm5_probe(struct platform_device *pdev)
 
 	regulator_set_voltage(data->regulator, 2775000, 2775000);
 
-	retval  = cpcap_irq_clear(data->cpcap, CPCAP_IRQ_HS);
 	retval |= cpcap_irq_clear(data->cpcap, CPCAP_IRQ_MB2);
 	retval |= cpcap_irq_clear(data->cpcap, CPCAP_IRQ_UC_PRIMACRO_5);
 	retval |= cpcap_irq_clear(data->cpcap, CPCAP_IRQ_UC_PRIMACRO_13);
 	if (retval)
 		goto reg_put;
 
-	retval = cpcap_irq_register(data->cpcap, CPCAP_IRQ_HS, hs_handler,
-				    data);
-	if (retval)
+	if (gpio_request(HS_DET_B_GPIO, "HS_DET")) {
+		dev_err(&pdev->dev, "HS_DET_B_GPIO: gpio %d request failed\n",
+			HS_DET_B_GPIO);
 		goto reg_put;
+	}
+	retval = request_irq(gpio_to_irq(HS_DET_B_GPIO), hs_handler,
+		IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "hs_det", data);
+	if (retval) {
+		dev_err(&pdev->dev,
+			"request_irq HS_DET_B_GPIO gpio %d -> irq %d failed\n",
+			HS_DET_B_GPIO, gpio_to_irq(HS_DET_B_GPIO));
+		goto free_hs;
+	}
+	enable_irq_wake(gpio_to_irq(HS_DET_B_GPIO));
+	INIT_DELAYED_WORK(&data->hs_work, hs_gpio_work);
+	wake_lock_init(&data->hs_work_wakelock, WAKE_LOCK_SUSPEND,
+		"hs_work_wakelock");
+	data->hs_workqueue = create_workqueue("hs_work");
+	if (data->hs_workqueue == NULL) {
+		retval = -ENOMEM;
+		dev_err(&pdev->dev, "unable to initialize workqueue\n");
+		goto free_hs;
+	}
 
 	retval = cpcap_irq_register(data->cpcap, CPCAP_IRQ_MB2, key_handler,
 				    data);
@@ -286,7 +520,7 @@ static int __init cpcap_3mm5_probe(struct platform_device *pdev)
 		cpcap_uc_start(data->cpcap, CPCAP_MACRO_13);
 	}
 
-	hs_handler(CPCAP_IRQ_HS, data);
+	queue_delayed_work(data->hs_workqueue, &data->hs_work, 0);
 
 	return 0;
 
@@ -295,7 +529,10 @@ free_mac5:
 free_mb2:
 	cpcap_irq_free(data->cpcap, CPCAP_IRQ_MB2);
 free_hs:
-	cpcap_irq_free(data->cpcap, CPCAP_IRQ_HS);
+	disable_irq_wake(gpio_to_irq(HS_DET_B_GPIO));
+	gpio_free(HS_DET_B_GPIO);
+	destroy_workqueue(data->hs_workqueue);
+	wake_lock_destroy(&data->hs_work_wakelock);
 reg_put:
 	regulator_put(data->regulator);
 free_mem:
@@ -308,10 +545,17 @@ static int __exit cpcap_3mm5_remove(struct platform_device *pdev)
 {
 	struct cpcap_3mm5_data *data = platform_get_drvdata(pdev);
 
+	disable_irq_wake(gpio_to_irq(HS_DET_B_GPIO));
+	gpio_free(HS_DET_B_GPIO);
+
+	cancel_delayed_work_sync(&data->hs_work);
+	destroy_workqueue(data->hs_workqueue);
+	wake_lock_destroy(&data->hs_work_wakelock);
+
 	cancel_delayed_work_sync(&data->work);
+	cancel_delayed_work_sync(&data->key_work);
 
 	cpcap_irq_free(data->cpcap, CPCAP_IRQ_MB2);
-	cpcap_irq_free(data->cpcap, CPCAP_IRQ_HS);
 	cpcap_irq_free(data->cpcap, CPCAP_IRQ_UC_PRIMACRO_5);
 	cpcap_irq_free(data->cpcap, CPCAP_IRQ_UC_PRIMACRO_13);
 

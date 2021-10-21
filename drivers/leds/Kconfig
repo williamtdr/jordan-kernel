@@ -260,6 +260,12 @@ config LEDS_LM3530
 	help
 	  This option enables support for the LM3530 .
 
+config LEDS_LM3535
+	tristate "LM3535 ALS driver"
+	depends on LEDS_CLASS && I2C
+	help
+	  This option enables support for the LM3535 .
+
 config LEDS_LM3554
 	tristate "LM3554 driver"
 	depends on LEDS_CLASS && I2C

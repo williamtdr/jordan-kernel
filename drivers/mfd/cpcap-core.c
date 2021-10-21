@@ -574,6 +574,27 @@ static void cpcap_shutdown(void)
 	spi_unregister_driver(&cpcap_driver);
 }
 
+int cpcap_disable_offmode_wakeups(bool disable)
+{
+	int retval = 0;
+	static int old_macro11_state = 1;
+
+	/*
+	 * Disable macro 11 (coloumb counter) interrupts on CPCAP in offmode
+	 * The coulomb counter will continue to accumulate and will be read
+	 * by battd if the system wakes up for another reason
+	 */
+	if (disable) {
+		old_macro11_state = cpcap_uc_status(misc_cpcap, CPCAP_MACRO_11);
+		if (old_macro11_state)
+			retval = cpcap_uc_stop(misc_cpcap, CPCAP_MACRO_11);
+
+	} else if (old_macro11_state)
+			retval = cpcap_uc_start(misc_cpcap, CPCAP_MACRO_11);
+
+	return retval;
+}
+
 subsys_initcall(cpcap_init);
 module_exit(cpcap_shutdown);
 

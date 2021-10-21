@@ -129,6 +129,8 @@
 #define DT_PROP_CPCAP_RGTINIT	"regulator_init"
 #define DT_PROP_CPCAP_RGTMODE	"regulator_mode"
 #define DT_PROP_CPCAP_RGTOFFMODE "regulator_off_mode"
+#define DT_PROP_CPCAP_HWCFG     "hwcfg"
+#define DT_PROP_CPCAP_ICHRGSENSE_RES "ichrg_sense_res"
 
 /* Display panel Node */
 #define DT_PATH_DISPLAY1	"/System@0/Display@0"
@@ -243,6 +245,10 @@
 /* Modem Node */
 #define DT_PATH_MODEM	"/System@0/Modem@0"
 #define DT_PROP_MODEM_TYPE	"type"
+
+/* Power Management Node */
+#define DT_PATH_POWER_MANAGEMENT	"/System@0/PwrMgmt@0"
+#define DT_PROP_OFFMODE_STRATEGY	"offmode"
 
 #endif
 #endif

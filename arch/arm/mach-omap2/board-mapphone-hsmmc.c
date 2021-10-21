@@ -25,7 +25,6 @@
 #include <linux/mmc/sdio_ids.h>
 #include <linux/regulator/consumer.h>
 
-#include <plat/board-mapphone.h>
 #include <plat/hardware.h>
 #include <plat/control.h>
 #include <plat/mmc.h>
@@ -40,9 +39,22 @@
 
 #define GPIO_SIGNAL_MMC_DET 163
 
+static const int mmc2_cd_gpio = OMAP_MAX_GPIO_LINES + 1;
+
 static int hsmmc_card_detect(int irq)
 {
 	return !gpio_get_value_cansleep(GPIO_SIGNAL_MMC_DET);
+}
+
+extern int mapphone_wifi_status(int irq);
+#ifdef CONFIG_MMC_EMBEDDED_SDIO
+extern int mapphone_wifi_status_register(void (*callback)(int card_present,
+						void *dev_id), void *dev_id);
+#endif
+
+static int wifi_sdio_detect(int irq)
+{
+	return mapphone_wifi_status(irq);
 }
 
 /*
@@ -176,6 +188,15 @@ static int hsmmc_set_power(struct device *dev, int slot, int power_on,
 	return 0;
 }
 
+#ifdef CONFIG_MMC_TEST_INSERT_REMOVE
+int ex_hsmmc_set_power(struct device *dev, int slot, int power_on,
+						int vdd)
+{
+    hsmmc_set_power(dev, slot, power_on, vdd);
+    return 0;
+}
+EXPORT_SYMBOL(ex_hsmmc_set_power);
+#endif
 
 static int emmc_set_power(struct device *dev, int slot, int power_on,
 				int vdd)
@@ -197,22 +218,34 @@ static int emmc_set_power(struct device *dev, int slot, int power_on,
 	return 0;
 }
 
-int wifi_set_power(struct device *dev, int slot, int power_on, int vdd)
+static int wifi_late_init(struct device *dev)
 {
-	static int power_state;
-	if (power_on == power_state) {
-		return 0;
-	}
-	power_state = power_on;
-	if (power_on) {
-		gpio_set_value(MAPPHONE_WIFI_PMENA_GPIO, 1);
-
-	} else {
-		gpio_set_value(MAPPHONE_WIFI_PMENA_GPIO, 0);
-	}
 	return 0;
 }
 
+static void wifi_cleanup(struct device *dev)
+{
+}
+
+static int wifi_set_power(struct device *dev, int slot, int power_on,
+				int vdd)
+{
+	return 0;
+}
+
+#ifdef CONFIG_PM
+static int wifi_suspend(struct device *dev, int slot)
+{
+	int ret = 0;
+	return ret;
+}
+
+static int wifi_resume(struct device *dev, int slot)
+{
+	int ret = 0;
+	return ret;
+}
+#endif
 
 static struct omap_mmc_platform_data mmc1_data __initdata = {
 	.nr_slots			= 1,
@@ -234,11 +267,11 @@ static struct omap_mmc_platform_data mmc1_data __initdata = {
 						MMC_VDD_165_195,
 		/* we get car_detect_irq later */
 		.card_detect_irq	= 0,
-		.keep_power		= 0,
 		.card_detect            = hsmmc_card_detect,
 	},
 };
 
+#if defined(CONFIG_OMAP_HS_MMC2)
 static struct omap_mmc_platform_data emmc_data __initdata = {
 	.nr_slots			= 1,
 	.init				= NULL,
@@ -256,26 +289,70 @@ static struct omap_mmc_platform_data emmc_data __initdata = {
 		.name			= "first slot",
 		.internal_clock		= 1,
 		.card_detect_irq        = 0,
-		.keep_power		= 0,
 		.card_detect            = NULL,
 		/* define .set_sleep to cut Vcc and leave VccQ alone */
 	},
 };
+#endif
+
+#ifdef CONFIG_MMC_EMBEDDED_SDIO
+static struct sdio_embedded_func wifi_func_array[] __initdata = {
+	{
+		.f_class        = SDIO_CLASS_NONE,
+		.f_maxblksize   = 0,
+	},
+	{
+		.f_class        = SDIO_CLASS_WLAN,
+		.f_maxblksize   = 512,
+	},
+};
+
+static struct embedded_sdio_data mapphone_wifi_emb_data __initdata = {
+	.cis    = {
+		.vendor         = 0x104c,
+		.device         = 0x9066,
+		.blksize        = 512,
+		.max_dtr        = 24000000,
+	},
+	.cccr   = {
+		.multi_block    = 1,
+		.low_speed      = 0,
+		.wide_bus       = 1,
+		.high_power     = 0,
+		.high_speed     = 0,
+	},
+	.funcs  = wifi_func_array,
+	.num_funcs = 2,
+};
+#endif
 
 static struct omap_mmc_platform_data wifi_data __initdata = {
 	.nr_slots			= 1,
+	.init				= wifi_late_init,
+	.cleanup			= wifi_cleanup,
+#ifdef CONFIG_PM
+	.suspend			= wifi_suspend,
+	.resume				= wifi_resume,
+#endif
+	.dma_mask			= 0xffffffff,
+#ifndef CONFIG_MMC_EMBEDDED_SDIO
+	.name				= "TIWLAN_SDIO",
+#endif
 	.slots[0] = {
 		.wires			= 4,
-		.nonremovable		= 1,
-		.power_saving		= 0,
 		.set_power		= wifi_set_power,
-		.ocr_mask		= MMC_VDD_165_195,
+		.ocr_mask		= MMC_VDD_32_33 | MMC_VDD_33_34 |
+						MMC_VDD_165_195,
 		.name			= "first slot",
 		.internal_clock		= 1,
 		.card_detect_irq        = 0,
-		.keep_power		= 1, //MMC_PM_KEEP_POWER;
+		.card_detect            = wifi_sdio_detect,
+#ifdef CONFIG_MMC_EMBEDDED_SDIO
+		.embedded_sdio		= &mapphone_wifi_emb_data,
+		.register_status_notify	= &mapphone_wifi_status_register,
+#endif
 	},
-};	
+};
 
 static struct omap_mmc_platform_data *hsmmc_data[OMAP34XX_NR_MMC] __initdata;
 

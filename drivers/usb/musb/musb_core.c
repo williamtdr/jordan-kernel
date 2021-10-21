@@ -922,6 +922,7 @@ void musb_start(struct musb *musb)
 	}
 	musb_platform_enable(musb);
 	musb_writeb(regs, MUSB_DEVCTL, devctl);
+	musb_platform_save_context(musb);
 }
 
 
@@ -1319,7 +1320,7 @@ static int __init musb_core_init(u16 musb_type, struct musb *musb)
 #endif
 	u8 reg;
 	char *type;
-	char aInfo[78], aRevision[32], aDate[12];
+	char aInfo[85], aRevision[32], aDate[12];
 	void __iomem	*mbase = musb->mregs;
 	int		status = 0;
 	int		i;
@@ -2192,6 +2193,9 @@ static int musb_suspend(struct device *dev)
 		musb->set_clock(musb->clock, 0);
 	else
 		clk_disable(musb->clock);
+
+	musb_platform_save_context(musb);
+
 	spin_unlock_irqrestore(&musb->lock, flags);
 	return 0;
 }
@@ -2200,6 +2204,8 @@ static int musb_resume_noirq(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct musb	*musb = dev_to_musb(&pdev->dev);
+
+	musb_platform_restore_context(musb);
 
 	if (!musb->clock)
 		return 0;

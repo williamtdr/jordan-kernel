@@ -459,3 +459,13 @@ struct omap_opp *omap_get_dsp_rate_table()
 	return dsp_opps;
 }
 EXPORT_SYMBOL(omap_get_dsp_rate_table);
+
+void omap_pm_suspend_opp(int enter)
+{
+	if (enter) {
+		set_and_lock_opp_2();
+	} else {
+		unlock_opps();
+	}
+}
+EXPORT_SYMBOL(omap_pm_suspend_opp);

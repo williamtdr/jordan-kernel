@@ -42,7 +42,13 @@
 #error CONFIG_ARM_OF must be defined for Mapphone to compile
 #endif
 #ifndef CONFIG_PANEL_MAPPHONE_HDTV
-#error CONFIG_PANEL_MAPPHONE_HDTV must be defined for Mapphone to compile
+/*#error CONFIG_PANEL_MAPPHONE_HDTV must be defined for Mapphone to compile*/
+#endif
+#ifndef CONFIG_OMAP2_DSS_DISPSW
+#error CONFIG_OMAP2_DSS_DISPSW must be defined for Mapphone to compile
+#endif
+#ifndef CONFIG_HDMI_TDA19989
+/*#error CONFIG_HDMI_TDA19989 must be defined for Mapphone to compile*/
 #endif
 #ifndef CONFIG_USER_PANEL_DRIVER
 #error CONFIG_USER_PANEL_DRIVER must be defined for Mapphone to compile
@@ -52,7 +58,7 @@
 
 static u16 mapphone_hdmi_stored_mux[6];
 static int mapphone_feature_hdmi;
-#ifdef CONFIG_HDMI_TDA19989
+
 static struct tda19989_platform_data mapphone_tda19989_data = {
 	.pwr_en_gpio = 0,
 	.int_gpio = 0,
@@ -66,7 +72,7 @@ static struct platform_device mapphone_tda19989_device = {
 		.platform_data = &mapphone_tda19989_data,
 	},
 };
-#endif
+
 static bool mapphone_panel_device_read_dt; /* This is by default false */
 
 /* This must be match in the DT */
@@ -102,6 +108,7 @@ static struct omap_dss_device mapphone_lcd_device = {
 	.phy.dsi.div.lck_div = 1,
 	.phy.dsi.div.pck_div = 4,
 	.phy.dsi.div.lp_clk_div = 7,
+	.phy.dsi.ulps_enabled = 0,
 	.reset_gpio = 0,
 	.phy.dsi.xfer_mode = OMAP_DSI_XFER_CMD_MODE,
 	.platform_enable = mapphone_panel_enable,
@@ -294,6 +301,10 @@ static int mapphone_dt_get_dsi_panel_info(void)
 	if (panel_prop != NULL)
 		mapphone_lcd_device.phy.dsi.div.pck_div = *(u16 *)panel_prop;
 
+	panel_prop = of_get_property(panel_node, "dsi_ulps_enabled", NULL);
+	if (panel_prop != NULL)
+		mapphone_lcd_device.phy.dsi.ulps_enabled = *(u8 *)panel_prop;
+
 	panel_prop = of_get_property(panel_node, "disp_intf", NULL);
 	if (panel_prop != NULL) {
 		disp_intf = *(u8 *)panel_prop;
@@ -366,7 +377,7 @@ static int mapphone_dt_get_dsi_vm_info(void)
 
 	return 0;
 }
-#ifdef CONFIG_HDMI_TDA19989
+
 static int mapphone_dt_get_tda19989_info(void)
 {
 	struct device_node *panel_node;
@@ -387,9 +398,7 @@ static int mapphone_dt_get_tda19989_info(void)
 	if (panel_prop != NULL)
 		mapphone_tda19989_data.int_gpio = *(u32 *)panel_prop;
 
-
 	panel_prop = of_get_property(panel_node, "cec_reg_name", NULL);
-
 	if (panel_prop != NULL) {
 		strncpy(mapphone_tda19989_data.cec_reg_name,
 				(char *)panel_prop,
@@ -400,7 +409,7 @@ static int mapphone_dt_get_tda19989_info(void)
 
 	return 0;
 }
-#endif
+
 static int mapphone_dt_get_hdtv_info(void)
 {
 	struct device_node *panel_node;
@@ -461,12 +470,10 @@ static int __init mapphone_dt_panel_init(void)
 				(mapphone_dt_get_dsi_vm_info() != 0)) {
 			printk(KERN_ERR "failed to parse DSI VM info \n");
 			ret = -ENODEV;
-#ifdef CONFIG_HDMI_TDA19989
 		} else if (mapphone_feature_hdmi &&
 				mapphone_dt_get_tda19989_info() != 0) {
 			printk(KERN_ERR "failed to parse TDA19989 info \n");
 			ret = -ENODEV;
-#endif
 		} else if (mapphone_feature_hdmi &&
 				mapphone_dt_get_hdtv_info() != 0) {
 			printk(KERN_ERR "failed to parse hdtv info \n");
@@ -546,7 +553,7 @@ static void mapphone_panel_disable_hdtv(struct omap_dss_device *dssdev)
 
 	gpio_set_value(mapphone_hdtv_mux_sel_gpio, 0);
 }
-#ifdef CONFIG_OMAP2_DSS_DISPSW
+
 static struct dispsw_mr_support mapphone_dispsw_hdtv_1_60Hz = {
 	.dev_name = "hdtv",
 	.res_name = "hdtv_1_60hz",
@@ -670,7 +677,7 @@ static struct platform_device mapphone_dispsw_device = {
 		.platform_data = &mapphone_dispsw_data,
 	},
 };
-#endif
+
 static struct platform_device omap_panel_device = {
 	.name = "omap-panel",
 	.id = -1,
@@ -704,8 +711,6 @@ void __init mapphone_panel_init(void)
 
 	gpio_direction_output(mapphone_lcd_device.reset_gpio, 1);
 
-	mapphone_feature_hdmi = false;
-
 	if (mapphone_feature_hdmi) {
 		ret = gpio_request(mapphone_hdtv_mux_en_gpio,
 							"HDMI-mux-enable");
@@ -724,12 +729,9 @@ void __init mapphone_panel_init(void)
 		}
 		gpio_direction_output(mapphone_hdtv_mux_sel_gpio, 0);
 		gpio_set_value(mapphone_hdtv_mux_sel_gpio, 0);
-#ifdef CONFIG_OMAP2_DSS_DISPSW
+
 		platform_device_register(&mapphone_dispsw_device);
-#endif
-#ifdef CONFIG_HDMI_TDA19989
 		platform_device_register(&mapphone_tda19989_device);
-#endif
 	} else {
 		/* Remove HDTV from the DSS device list */
 		mapphone_dss_data.num_devices--;

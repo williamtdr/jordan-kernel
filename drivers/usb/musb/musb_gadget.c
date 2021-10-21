@@ -1534,82 +1534,6 @@ static void musb_pullup2(struct musb *musb, int is_on)
 	musb_writeb(musb->mregs, MUSB_POWER, power);
 }
 
-bool cpcap_usb = false;
-bool cpcap_otg = false;
-
-static void musb_pullup(struct musb *musb, int is_on)
-{
-	is_on = !!is_on;
-
-	if (is_on && !cpcap_usb) {
-		printk("Disable usb\n");
-		musb_pullup2(musb, !is_on);
-		stop_activity(musb, musb->gadget_driver);
-	} else if (is_on && cpcap_usb) {
-		musb_pullup2(musb, is_on);
-		printk("Enable usb\n");
-	}
-}
-
-void cpcap_musb_notifier_call(unsigned char event)
-{
- 	struct musb *musb = g_musb;
-	u8 power;
-	u32 stdby;
-	u32 reg;
-
-
-	if ((event == 0) && cpcap_otg) {
-		printk("Disable otg\n");
-		reg = omap_readl(OTG_SYSCONFIG);
-		stdby = omap_readl(OTG_FORCESTDBY);
-		power = musb_readb(musb->mregs, MUSB_POWER);
-
-		reg &= ~NOSTDBY;          /* remove possible nostdby */
-		reg &= ~NOIDLE;           /* remove possible noidle */
-		power &= ~MUSB_POWER_SOFTCONN;
-		stdby |= ENABLEFORCE;     /* enable MSTANDBY */
-
-		omap_writel(stdby, OTG_FORCESTDBY);
-		omap_writel(reg, OTG_SYSCONFIG);
-		musb_writeb(musb->mregs, MUSB_POWER, power);
-
-		musb->xceiv->state = OTG_STATE_B_IDLE;
-		musb->is_host = false;	
-		musb_pullup2(musb, 0);
-		musb_stop(musb);			
-		musb_g_reset(musb);
-		cpcap_otg = false;
-		return;
-
-	} else if ((event == 2) && !cpcap_otg) {
-		printk("Enable otg\n");
-
-		stdby = omap_readl(OTG_FORCESTDBY);
-		power = musb_readb(musb->mregs, MUSB_POWER);
-
-		reg = 0x11;
-		power |= MUSB_POWER_SOFTCONN;
-		stdby &= ~ENABLEFORCE;	/* disable MSTANDBY */
-
-		omap_writel(stdby, OTG_FORCESTDBY);
-		omap_writel(reg, OTG_SYSCONFIG);
-		musb_writeb(musb->mregs, MUSB_POWER, power);
-
-		musb->xceiv->state = OTG_STATE_A_IDLE;
-		musb->is_host = true;
- 		musb_g_reset(musb);
-		musb_pullup2(musb, 1);
-		musb_start(musb);
-		cpcap_otg = true;
-		return;
-
-	} else if (!cpcap_otg) {
-		cpcap_usb = (event == 1);
-		musb_pullup(musb,1);
-	}
-}
-
 #if 0
 static int musb_gadget_vbus_session(struct usb_gadget *gadget, int is_active)
 {
@@ -1647,7 +1571,7 @@ static int musb_gadget_pullup(struct usb_gadget *gadget, int is_on)
 	if (is_on) {
 	    if (!musb->softconnect) {
 			musb->softconnect = 1;
-			musb_pullup(musb, is_on);
+			musb_pullup2(musb, is_on);
 		}
 	} else
 		stop_activity(musb, musb->gadget_driver);
@@ -1808,8 +1732,7 @@ void musb_gadget_cleanup(struct musb *musb)
  * @param driver the gadget driver
  * @return <0 if error, 0 if everything is fine
  */
-int usb_gadget_probe_driver(struct usb_gadget_driver *driver,
-		int (*bind)(struct usb_gadget *))
+int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 {
 	int retval;
 	unsigned long flags;
@@ -1817,7 +1740,7 @@ int usb_gadget_probe_driver(struct usb_gadget_driver *driver,
 
 	if (!driver
 			|| driver->speed != USB_SPEED_HIGH
-			|| !bind
+			|| !driver->bind
 			|| !driver->setup)
 		return -EINVAL;
 
@@ -1847,7 +1770,7 @@ int usb_gadget_probe_driver(struct usb_gadget_driver *driver,
 	spin_unlock_irqrestore(&musb->lock, flags);
 
 	if (retval == 0) {
-		retval = bind(&musb->g);
+		retval = driver->bind(&musb->g);
 		if (retval != 0) {
 			DBG(3, "bind to driver %s failed --> %d\n",
 					driver->driver.name, retval);
@@ -1894,7 +1817,7 @@ int usb_gadget_probe_driver(struct usb_gadget_driver *driver,
 
 	return retval;
 }
-EXPORT_SYMBOL(usb_gadget_probe_driver);
+EXPORT_SYMBOL(usb_gadget_register_driver);
 
 static void stop_activity(struct musb *musb, struct usb_gadget_driver *driver)
 {
@@ -1909,7 +1832,7 @@ static void stop_activity(struct musb *musb, struct usb_gadget_driver *driver)
 
 	/* deactivate the hardware */
 	musb->softconnect = 0;
-	musb_pullup(musb, 0);
+	musb_pullup2(musb, 0);
 	musb_stop(musb);
 
 	/* killing any outstanding requests will quiesce the driver;

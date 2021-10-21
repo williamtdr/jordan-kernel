@@ -24,12 +24,15 @@
 #include <linux/leds-cpcap-gpio.h>
 #include <linux/leds-cpcap-kpb.h>
 #include <linux/leds-cpcap-mdb.h>
+#include <linux/leds-cpcap-als.h>
 #include <linux/leds-cpcap-rgb.h>
+#include <linux/leds-cpcap-chrg.h>
 
 #ifdef CONFIG_ARM_OF
 #include <mach/dt_path.h>
 #include <asm/prom.h>
 #endif
+
 /*
  * CPCAP devcies are common for different HW Rev.
  *
@@ -58,6 +61,16 @@ static struct platform_device cpcap_usb_det_device = {
 };
 #endif /* CONFIG_CPCAP_USB */
 
+#ifdef CONFIG_TTA_CHARGER
+static struct platform_device cpcap_tta_det_device = {
+	.name   = "cpcap_tta_charger",
+	.id     = -1,
+	.dev    = {
+		.platform_data  = NULL,
+	},
+};
+#endif
+
 
 #ifdef CONFIG_SOUND_CPCAP_OMAP
 static struct platform_device cpcap_audio_device = {
@@ -67,20 +80,52 @@ static struct platform_device cpcap_audio_device = {
 };
 #endif
 
-static struct platform_device *cpcap_devices[] = {
+static struct platform_device cpcap_bd7885 = {
+	.name           = "bd7885",
+	.id             = -1,
+	.dev            = {
+		.platform_data  = NULL,
+       },
+};
 
-#ifdef CONFIG_SOUND_CPCAP_OMAP
-  &cpcap_audio_device,
+static struct platform_device cpcap_vio_active_device = {
+	.name		= "cpcap_vio_active",
+	.id		= -1,
+	.dev		= {
+		.platform_data = NULL,
+	},
+};
+
+#ifdef CONFIG_PM_DBG_DRV
+static struct platform_device cpcap_pm_dbg_device = {
+	.name		= "cpcap_pm_dbg",
+	.id		= -1,
+	.dev		= {
+		.platform_data = NULL,
+	},
+};
+
+static struct pm_dbg_drvdata cpcap_pm_dbg_drvdata = {
+	.pm_cd_factor = 1000,
+};
 #endif
 
+static struct platform_device *cpcap_devices[] = {
 #ifdef CONFIG_CPCAP_USB
 	&cpcap_usb_device,
 	&cpcap_usb_det_device,
 #endif
+#ifdef CONFIG_SOUND_CPCAP_OMAP
+	&cpcap_audio_device,
+#endif
 	&cpcap_3mm5_device,
+#ifdef CONFIG_TTA_CHARGER
+	&cpcap_tta_det_device,
+#endif
 #ifdef CONFIG_LEDS_AF_LED
 	&cpcap_af_led,
 #endif
+	&cpcap_bd7885
 };
 
 
@@ -90,6 +135,14 @@ static struct platform_device *cpcap_devices[] = {
  */
 static struct platform_device cpcap_lm3554 = {
 	.name           = "flash-torch",
+	.id             = -1,
+	.dev            = {
+		.platform_data  = NULL,
+	},
+};
+
+static struct platform_device cpcap_lm3559 = {
+	.name           = "flash-torch-3559",
 	.id             = -1,
 	.dev            = {
 		.platform_data  = NULL,
@@ -147,6 +200,7 @@ static struct platform_device cpcap_kpb_led = {
 static struct cpcap_mdb_led_config_data mdb_led_data = {
 	.init = CPCAP_MDB_INIT,
 	.abmode_config = &abmode_config_data,
+	.regulator = "\0",
 	.class_name = CPCAP_MDB_LED_CLASS_NAME,
 };
 
@@ -158,11 +212,24 @@ static struct platform_device cpcap_mdb_led = {
 	},
 };
 
+static struct cpcap_als_led_config_data als_led_data = {
+	.class_name = CPCAP_ALS_LED_CLASS_NAME,
+};
+
+static struct platform_device cpcap_als_led = {
+	.name = CPCAP_ALS_LED_DRV_NAME,
+	.id   = -1,
+	.dev  = {
+		.platform_data  = &als_led_data,
+	},
+};
+
 static struct cpcap_rgb_led_config_data rgb_led_data = {
 	.red_enable = true,
 	.green_enable = true,
 	.blue_enable = true,
 	.blink_enable = true,
+	.blink_rate_enable = true,
 	.class_name_red = CPCAP_RGB_LED_RED_CLASS_NAME,
 	.class_name_green = CPCAP_RGB_LED_GREEN_CLASS_NAME,
 	.class_name_blue = CPCAP_RGB_LED_BLUE_CLASS_NAME,
@@ -173,6 +240,20 @@ static struct platform_device cpcap_rgb_led = {
 	.id   = -1,
 	.dev  = {
 	.platform_data  = &rgb_led_data,
+	},
+};
+
+/* Changes for the charging LED */
+static struct cpcap_chrg_led_config_data chrg_led_data = {
+    .on = CPCAP_CHRG_ON,
+	.class_name = CPCAP_CHRG_LED_CHRG_CLASS_NAME,
+};
+
+static struct platform_device cpcap_chrg_led = {
+	.name = CPCAP_CHRG_LED_DRV_NAME,
+	.id   = -1,
+	.dev  = {
+	.platform_data  = &chrg_led_data,
 	},
 };
 
@@ -198,6 +279,47 @@ static int __init led_cpcap_lm3554_init(void)
 
 	of_node_put(node);
 	return device_available;
+}
+
+static int __init led_cpcap_lm3559_init(void)
+{
+	u8 device_available;
+	struct device_node *node;
+	const void *prop;
+
+	node = of_find_node_by_path(DT_PATH_LM3559);
+	if (node == NULL)
+		return -ENODEV;
+
+	prop = of_get_property(node, "device_available", NULL);
+	if (prop)
+		device_available = *(u8 *)prop;
+	else {
+		pr_err("Read property %s error!\n", "device_available");
+		of_node_put(node);
+		return -ENODEV;
+	}
+
+	of_node_put(node);
+	return device_available;
+}
+
+static int is_cpcap_vio_supply_converter(void)
+{
+	struct device_node *node;
+	const void *prop;
+	int size;
+
+	node = of_find_node_by_path(DT_PATH_CPCAP);
+	if (node) {
+		prop = of_get_property(node,
+				DT_PROP_CPCAP_VIO_SUPPLY_CONVERTER,
+				&size);
+		if (prop && size)
+			return *(u8 *)prop;
+	}
+	/* The converter is existing by default */
+	return 1;
 }
 
 #ifdef CONFIG_SOUND_CPCAP_OMAP
@@ -372,6 +494,14 @@ static int cpcap_mdb_led_init(struct device_node *node)
 	if (prop && len)
 		mdb_led_data.init = *(u16 *)prop;
 
+	prop = of_get_property(node, "regulator", &len);
+	if (prop && len) {
+		strncpy(mdb_led_data.regulator, (char *)prop,
+			sizeof(mdb_led_data.regulator) - 1);
+		mdb_led_data.regulator[sizeof(mdb_led_data.regulator) - 1]
+			= '\0';
+	}
+
 	prop = of_get_property(node, "dev_name", &len);
 	if (prop && len) {
 		strncpy(mdb_led_data.class_name, (char *)prop,
@@ -382,6 +512,25 @@ static int cpcap_mdb_led_init(struct device_node *node)
 
 	cpcap_device_register(&cpcap_mdb_led);
 
+	return 0;
+}
+
+static int cpcap_als_led_init(struct device_node *node)
+{
+	const void *prop;
+	int len = 0;
+
+	if (node == NULL)
+		return -ENODEV;
+
+	prop = of_get_property(node, "dev_name", &len);
+	if (prop && len) {
+		strncpy(als_led_data.class_name, (char *)prop,
+			sizeof(als_led_data.class_name) - 1);
+		als_led_data.class_name[sizeof(als_led_data.class_name) - 1]
+			= '\0';
+	}
+	cpcap_device_register(&cpcap_als_led);
 	return 0;
 }
 
@@ -408,6 +557,10 @@ static int cpcap_rgb_led_init(struct device_node *node)
 	prop = of_get_property(node, "enable_blink", &len);
 	if (prop && len)
 		rgb_led_data.blink_enable = *(u8 *)prop;
+
+	prop = of_get_property(node, "blink_rate", &len);
+	if (prop && len)
+		rgb_led_data.blink_rate_enable = *(u16 *)prop;
 
 	prop = of_get_property(node, "dev_name_red", &len);
 	if (prop && len) {
@@ -437,6 +590,31 @@ static int cpcap_rgb_led_init(struct device_node *node)
 	}
 
 	cpcap_device_register(&cpcap_rgb_led);
+
+	return 0;
+}
+
+static int cpcap_chrg_led_init(struct device_node *node)
+{
+    const void *prop;
+	int len = 0;
+
+	if (node == NULL)
+		return -ENODEV;
+
+	prop = of_get_property(node, "on", &len);
+	if (prop && len)
+		chrg_led_data.on = *(u16 *)prop;
+
+	prop = of_get_property(node, "dev_name", &len);
+	if (prop && len) {
+		strncpy(chrg_led_data.class_name, (char *)prop,
+			sizeof(chrg_led_data.class_name) - 1);
+		chrg_led_data.class_name[sizeof(chrg_led_data.class_name) - 1]
+			= '\0';
+	}
+
+	cpcap_device_register(&cpcap_chrg_led);
 
 	return 0;
 }
@@ -495,6 +673,14 @@ static void cpcap_leds_init(void)
 				pr_info("CPCAP,RGB found.\n");
 				cpcap_rgb_led_init(node);
 				break;
+			case 0x00210006:
+				pr_info("CPCAP,CHRG LED found.\n");
+				cpcap_chrg_led_init(node);
+				break;
+			case 0x00210007:
+				pr_info("CPCAP,ALS found.\n");
+				cpcap_als_led_init(node);
+				break;
 			default:
 				pr_err("Unknown CPCAP LED device 0x%8x.\n",
 					*(int *)prop);
@@ -505,6 +691,25 @@ static void cpcap_leds_init(void)
 		node = of_find_node_by_name(node, "LEDController");
 	}
 }
+
+#ifdef CONFIG_PM_DBG_DRV
+static void get_pm_dbg_drvdata(void)
+{
+	struct device_node *node;
+	const void *prop;
+	int size;
+
+	node = of_find_node_by_path("/System@0/PMDbgDevice@0");
+	if (node) {
+		prop = of_get_property(node,
+			"pm_cd_factor",
+			&size);
+		if (prop && size)
+			cpcap_pm_dbg_drvdata.pm_cd_factor = *(u16 *)prop;
+	}
+}
+#endif
+
 #endif /* CONFIG_ARM_OF */
 
 
@@ -524,4 +729,15 @@ void __init mapphone_cpcap_client_init(void)
 	if (led_cpcap_lm3554_init() > 0)
 		cpcap_device_register(&cpcap_lm3554);
 
+	if (led_cpcap_lm3559_init() > 0)
+		cpcap_device_register(&cpcap_lm3559);
+
+	if (!is_cpcap_vio_supply_converter())
+		cpcap_device_register(&cpcap_vio_active_device);
+
+#ifdef CONFIG_PM_DBG_DRV
+	get_pm_dbg_drvdata();
+	cpcap_device_register(&cpcap_pm_dbg_device);
+	platform_set_drvdata(&cpcap_pm_dbg_device, &cpcap_pm_dbg_drvdata);
+#endif
 }

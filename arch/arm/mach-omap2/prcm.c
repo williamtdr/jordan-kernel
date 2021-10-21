@@ -26,9 +26,11 @@
 #include <plat/prcm.h>
 #include <plat/irqs.h>
 #include <plat/control.h>
+#include <plat/resource.h>
 
 #include "clock.h"
 #include "cm.h"
+#include "pm.h"
 #include "prm.h"
 #include "prm-regbits-24xx.h"
 
@@ -133,6 +135,8 @@ void omap_prcm_arch_reset(char mode)
 {
 	s16 prcm_offs;
 	omap2_clk_prepare_for_reboot();
+
+	set_and_lock_opps_max(true);
 
 	if (cpu_is_omap24xx())
 		prcm_offs = WKUP_MOD;

@@ -99,3 +99,16 @@ config SND_OMAP_SOC_ZOOM2
 	help
 	  Say Y if you want to add support for Soc audio on Zoom2 board.
 
+config SND_OMAP_SOC_OMAP3_CDB42L73
+	tristate "SoC Audio support for OMAP3 / CDB42L73"
+	depends on SND_OMAP_SOC
+	select SND_OMAP_SOC_MCBSP
+	select SND_SOC_CS42L73
+	help
+	  Say Y if you want to add support for CDB42L73 audio on the OMAP3.
+
+config SND_OMAP_SOC_CS48L10
+	tristate "Add CS48L10 DSP Audio support for OMAP3"
+	depends on SND_OMAP_SOC_OMAP3_CDB42L73 && SPI
+	help
+	  Say Y if you want to add support for CS48L10 DSP audio effects on OMAP3

@@ -40,14 +40,16 @@ pub2sec_bridge_entry:
       MCR      p15, 0, R0, c7, c5, 4   // Prefetch Buffer flush
       MCR      p15, 0, R0, c7, c10, 4  // Data Synchro Barrier
       INVALIDATE_BTB                // Invalidate entire branch predictor array
-      SMC      1
+      .arch_extension sec
+	SMC      1
       B        service_end
       NOP
       INVALIDATE_BTB                // Invalidate entire branch predictor array
       BL       SCXLNXSMCommReturnFromIRQ
       MOV      R12, #SMICODEPUB_IRQ_END
       INVALIDATE_BTB                // Invalidate entire branch predictor array
-      SMC      1
+      .arch_extension sec
+	SMC      1
 
 service_end:
       INVALIDATE_BTB                // Invalidate entire branch predictor array
@@ -62,6 +64,7 @@ rpc_handler:
       BL       SCXLNXSMCommRPCHandler
       MOV      R12, #SMICODEPUB_RPC_END
       INVALIDATE_BTB                // Invalidate entire branch predictor array
+	.arch_extension sec
       SMC      1
 
 #ifdef COMPILE_AS_LINUX_MODULE

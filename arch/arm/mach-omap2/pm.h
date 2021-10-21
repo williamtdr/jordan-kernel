@@ -13,27 +13,55 @@
 
 #include <plat/powerdomain.h>
 
+#define OFFMODE_STRATEGY_DISABLED    0x00
+#define OFFMODE_STRATEGY_INSUSPEND   0x01
+#define OFFMODE_STRATEGY_IDLETIMER   0x02
+
 extern u32 enable_off_mode;
 extern u32 sleep_while_idle;
 extern u32 voltage_off_while_idle;
 extern unsigned int wakeup_timer_nseconds;
 extern u32 enable_abb_mode;
+extern u32 offmode_strategy;
 
 extern void *omap3_secure_ram_storage;
 extern void omap3_pm_off_mode_enable(int);
+extern void omap3_pm_offmode_strategy(int);
 extern void omap_sram_idle(void);
 extern int omap3_can_sleep(void);
 extern int set_pwrdm_state(struct powerdomain *pwrdm, u32 state);
 extern int omap3_idle_init(void);
 extern void vfp_pm_save_context(void);
+#ifdef CONFIG_PM
+extern void pm_alloc_secure_ram(void);
+#else
+static inline void pm_alloc_secure_ram(void) { }
+#endif
 
 extern void lock_scratchpad_sem(void);
 extern void unlock_scratchpad_sem(void);
+
+/**
+ * struct omap3_secure_copy_data - describe behavior for the secure ram copy
+ * @size:       size of copy to be saved - this is based on the PPA used
+ *              secure ram size could be configured to various sizes, this is
+ *              the size used + 64 byte header required.
+ *
+ * Different platforms use different security PPAs based on their unique needs.
+ * This structure describes the delta behavior expected for these custom
+ * platforms. The defaults are configured for official TI OMAP3 PPA behavior.
+ */
+struct omap3_secure_copy_data {
+	u32 size;
+};
+
 
 struct prm_setup_vc {
 	u16 clksetup;
 	u16 voltsetup_time1;
 	u16 voltsetup_time2;
+	u16 voltsetup_time1_off;
+	u16 voltsetup_time2_off;
 	u16 voltoffset;
 	u16 voltsetup2;
 
@@ -101,13 +129,13 @@ extern int omap2_pm_debug;
 extern void pm_dbg_update_time(struct powerdomain *pwrdm, int prev);
 extern int pm_dbg_regset_save(int reg_set);
 extern int pm_dbg_regset_init(int reg_set);
-extern void pm_dbg_show_core_regs(void);
+extern void pm_dbg_show_cm_regs(const char *domain);
 extern void pm_dbg_show_wakeup_source(void);
 #else
 #define pm_dbg_update_time(pwrdm, prev) do {} while (0);
 #define pm_dbg_regset_save(reg_set) do {} while (0);
 #define pm_dbg_regset_init(reg_set) do {} while (0);
-#define pm_dbg_show_core_regs() do {} while (0);
+#define pm_dbg_show_cm_regs(domain) do {} while (0);
 #define pm_dbg_show_wakeup_source() do {} while (0);
 #endif /* CONFIG_PM_DEBUG */
 

@@ -39,6 +39,9 @@
 #define RAM_START_ST         0x0000
 #define RAM_END_ST           0x0FFF
 
+#define HWCFG_ADDR_ST        0x0148
+#define HWCFG_ADDR_TI        0x90F4  /* Not yet implemented in the TI uC. */
+
 enum {
 	READ_STATE_1,	/* Send size and location of RAM read. */
 	READ_STATE_2,   /*!< Read MT registers. */
@@ -614,7 +617,9 @@ int cpcap_uc_start(struct cpcap_device *cpcap, enum cpcap_macro macro)
 	    (data->uc_reset == 0)) {
 		if ((macro == CPCAP_MACRO_4) ||
 		    ((cpcap->vendor == CPCAP_VENDOR_ST) &&
-		     (macro == CPCAP_MACRO_12))) {
+		     (macro == CPCAP_MACRO_12)) ||
+		    ((cpcap->vendor == CPCAP_VENDOR_ST) &&
+		     (macro == CPCAP_MACRO_15))) {
 			retval = cpcap_regacc_write(cpcap, CPCAP_REG_MI2,
 						    (1 << macro),
 						    (1 << macro));
@@ -769,8 +774,23 @@ static int fw_load(struct cpcap_uc_data *uc_data, struct device *dev)
 		dev_info(dev, "Loaded Sec SPI Init = %d: %d\n",
 			 data->is_umts, err);
 
+		if (uc_data->cpcap->vendor == CPCAP_VENDOR_ST)
+			err = ram_write(uc_data, HWCFG_ADDR_ST,
+					CPCAP_HWCFG_NUM, data->hwcfg);
+		else
+			err = ram_write(uc_data, HWCFG_ADDR_TI,
+					CPCAP_HWCFG_NUM, data->hwcfg);
+
+		dev_info(dev, "Loaded HWCFG data:");
+		for (i = 0; i < CPCAP_HWCFG_NUM; i++)
+			dev_info(dev, " 0x%04x", data->hwcfg[i]);
+		dev_info(dev, "result: %d\n", err);
+
 		err = cpcap_uc_start(uc_data->cpcap, CPCAP_MACRO_4);
 		dev_info(dev, "Started macro 4: %d\n", err);
+
+		err = cpcap_uc_start(uc_data->cpcap, CPCAP_MACRO_15);
+		dev_info(dev, "Started macro 15: %d\n", err);
 	}
 
 err:

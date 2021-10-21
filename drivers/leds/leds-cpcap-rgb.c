@@ -39,6 +39,17 @@ module_param_named(debug, debug, uint, 0664);
 
 static struct cpcap_rgb_led_config_data rgb_led_config_data;
 
+/* Var to store the status of Blink device property */
+static int blink_status = LED_OFF;
+
+/* LED Blink enums */
+enum blink_rates_en {
+	BLINK_SLOW=0,  /* Normal Notification */
+	BLINK_FAST=1  /* Low Battery Notification */
+};
+
+#define LED_BLINK_BIT  0x9
+
 void cpcap_rgb_led_set_brightness(struct cpcap_rgb_led_data *cpcap_rgb_data,
 				  int color,
 				  enum led_brightness value)
@@ -171,10 +182,115 @@ cpcap_rgb_led_blink(struct device *dev, struct device_attribute *attr,
 	else
 		cpcap_uc_stop(blink_led_data->cpcap, CPCAP_MACRO_6);
 
+	/* Globally stored so that we can get the status of blink via "GET" */
+	blink_status = (int) led_blink;
+
 	return 0;
 }
 
-static DEVICE_ATTR(blink, 0644, NULL, cpcap_rgb_led_blink);
+static ssize_t cpcap_rgb_get_led_blink(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	struct cpcap_rgb_led_data *rgb_led_data;
+	struct platform_device *pdev =
+		container_of(dev->parent, struct platform_device, dev);
+       unsigned short reg_val = 0, regval_2 = 0;
+       int cpcap_status = 0;
+
+	rgb_led_data = platform_get_drvdata(pdev);
+
+	if (rgb_led_data->cpcap == NULL) {
+		pr_err("%s: CPCAP Struct is NULL\n", __func__);
+		return -1;
+	}
+
+	cpcap_status = sprintf(buf, "%d\n", blink_status);
+
+	return cpcap_status;
+}
+
+
+static DEVICE_ATTR(blink, 0644, cpcap_rgb_get_led_blink, cpcap_rgb_led_blink);
+
+static ssize_t cpcap_rgb_led_set_blink_rate(struct device *dev, struct device_attribute *attr,
+	      const char *buf, size_t count)
+{
+	struct cpcap_rgb_led_data *rgb_led_data;
+	struct platform_device *pdev =
+		container_of(dev->parent, struct platform_device, dev);
+
+	unsigned long led_blink_rate = BLINK_SLOW;
+	int ret = 0;
+	int cpcap_status = 0;
+
+	rgb_led_data = platform_get_drvdata(pdev);
+
+	if (rgb_led_data->cpcap == NULL) {
+		pr_err("%s: CPCAP Struct is NULL\n", __func__);
+		return -1;
+	}
+
+	ret = strict_strtoul(buf, 10, &led_blink_rate);
+	if ((led_blink_rate != BLINK_SLOW) && (led_blink_rate != BLINK_FAST)) {
+		pr_err("%s: Invalid parameter sent\n", __func__);
+		return -1;
+	}
+
+	if (debug)
+		pr_info("%s %ld\n", __func__, led_blink_rate);
+
+	/* Bit 10 of REDC register is repurposed as the the blink rate */
+	cpcap_status = cpcap_regacc_write(rgb_led_data->cpcap,
+					  CPCAP_REG_REDC,
+					  led_blink_rate == BLINK_FAST ?
+					    CPCAP_RGB_LED_BLINK_MASK : 0,
+                                          CPCAP_RGB_LED_BLINK_MASK);
+	if (cpcap_status < 0) {
+		pr_err("%s: Writing to the register failed for %i\n",
+			   __func__, cpcap_status);
+		return -1;
+	}
+
+	return 0;
+}
+
+static ssize_t cpcap_rgb_led_get_blink_rate(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+       struct cpcap_rgb_led_data *rgb_led_data;
+       struct platform_device *pdev =
+		container_of(dev->parent, struct platform_device, dev);
+       unsigned short reg_val = 0, regval_2 = 0;
+       int cpcap_status = 0;
+
+	rgb_led_data = platform_get_drvdata(pdev);
+
+	if (rgb_led_data->cpcap == NULL) {
+		pr_err("%s: CPCAP Struct is NULL\n", __func__);
+		return -1;
+	}
+
+	/* Bit 10 of REDC register is repurposed as the the blink rate */
+	cpcap_status = cpcap_regacc_read(rgb_led_data->cpcap,
+					  CPCAP_REG_REDC,
+					  &reg_val);
+
+       /* Check if the Blink Rate is enabled or not */
+       regval_2 = (reg_val & CPCAP_RGB_LED_BLINK_MASK) >> LED_BLINK_BIT;
+
+       if (cpcap_status < 0) {
+		pr_err("%s: Reading to the register failed for %i\n",
+			   __func__, cpcap_status);
+		return -1;
+       }
+
+       cpcap_status = sprintf(buf, "%u\n", regval_2);
+
+	return cpcap_status;
+}
+
+static DEVICE_ATTR(blink_rate, 0777,
+		cpcap_rgb_led_get_blink_rate, cpcap_rgb_led_set_blink_rate);
 
 static int cpcap_rgb_led_rgb_probe(struct platform_device *pdev)
 {
@@ -203,14 +319,15 @@ static int cpcap_rgb_led_rgb_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, info);
 
-	info->regulator = regulator_get(NULL, CPCAP_RGB_LED_REG);
-	if (IS_ERR(info->regulator)) {
-		pr_err("%s: Cannot get %s regulator\n", __func__,
-		       CPCAP_RGB_LED_REG);
-		ret = PTR_ERR(info->regulator);
-		goto err_request_reg_failed;
+	if (CPCAP_RGB_LED_REG) {
+		info->regulator = regulator_get(NULL, CPCAP_RGB_LED_REG);
+		if (IS_ERR(info->regulator)) {
+			pr_err("%s: Cannot get regulator\n", __func__);
+			ret = PTR_ERR(info->regulator);
+			goto err_request_reg_failed;
+		}
+		info->regulator_state = 0;
 	}
-	info->regulator_state = 0;
 
 	if (rgb_led_config_data.red_enable) {
 		info->cpcap_red_led_class_dev.name =
@@ -232,6 +349,17 @@ static int cpcap_rgb_led_rgb_probe(struct platform_device *pdev)
 				pr_err("%s: File device creation failed: %d\n",
 				       __func__, ret);
 				goto err_create_blink_failed;
+			}
+		}
+
+		if (rgb_led_config_data.blink_rate_enable) {
+			ret = device_create_file(
+				info->cpcap_red_led_class_dev.dev,
+				&dev_attr_blink_rate);
+			if (ret < 0) {
+				pr_err("%s: File device creation failed: %d\n",
+				       __func__, ret);
+				goto err_create_blink_rate_failed;
 			}
 		}
 	}
@@ -275,6 +403,9 @@ err_reg_blue_class_failed:
 err_reg_green_class_failed:
 	device_remove_file(info->cpcap_red_led_class_dev.dev,
 			   &dev_attr_blink);
+
+err_create_blink_rate_failed:
+	led_classdev_unregister(&info->cpcap_red_led_class_dev);
 
 err_create_blink_failed:
 	led_classdev_unregister(&info->cpcap_red_led_class_dev);

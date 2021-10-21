@@ -29,6 +29,7 @@
 enum {
 	WAKE_LOCK_SUSPEND, /* Prevent suspend */
 	WAKE_LOCK_IDLE,    /* Prevent low power idle */
+	WAKE_LOCK_OFFMODE, /* Prevents offmode, but allows suspend */
 	WAKE_LOCK_TYPE_COUNT
 };
 
@@ -48,6 +49,7 @@ struct wake_lock {
 		int             wakeup_count;
 		ktime_t         total_time;
 		ktime_t         prevent_suspend_time;
+		ktime_t         prevent_offmode_time;
 		ktime_t         max_time;
 		ktime_t         last_time;
 	} stat;

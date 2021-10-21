@@ -31,6 +31,7 @@
 #include <linux/i2c/adp8870.h>
 #include <linux/isl29030.h>
 #include <linux/kxtf9.h>
+#include <linux/msp430.h>
 #include <linux/lis331dlh.h>
 
 extern struct adp8870_backlight_platform_data adp8870_pdata;
@@ -38,6 +39,7 @@ extern struct akm8973_platform_data mapphone_akm8973_data;
 extern struct akm8975_platform_data mapphone_akm8975_pdata;
 extern struct isl29030_platform_data isl29030_pdata;
 extern struct kxtf9_platform_data mapphone_kxtf9_data;
+extern struct msp430_platform_data mapphone_msp430_data;
 extern struct lis331dlh_platform_data mapphone_lis331dlh_data;
 
 #endif /* __BOARD_MAPPHONE_SENSORS_H */

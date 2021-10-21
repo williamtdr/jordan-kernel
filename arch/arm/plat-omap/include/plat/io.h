@@ -122,6 +122,17 @@
 #define OMAP243X_SMS_VIRT	(OMAP243X_SMS_PHYS + OMAP2_L3_IO_OFFSET)
 #define OMAP243X_SMS_SIZE	SZ_1M
 
+/* DSP */
+#define DSP_MEM_24XX_PHYS	OMAP2420_DSP_MEM_BASE	/* 0x58000000 */
+#define DSP_MEM_24XX_VIRT	0xe0000000
+#define DSP_MEM_24XX_SIZE	0x28000
+#define DSP_IPI_24XX_PHYS	OMAP2420_DSP_IPI_BASE	/* 0x59000000 */
+#define DSP_IPI_24XX_VIRT	0xe1000000
+#define DSP_IPI_24XX_SIZE	SZ_4K
+#define DSP_MMU_24XX_PHYS	OMAP2420_DSP_MMU_BASE	/* 0x5a000000 */
+#define DSP_MMU_24XX_VIRT	0xe2000000
+#define DSP_MMU_24XX_SIZE	SZ_4K
+
 /* 2420 IVA */
 #define DSP_MEM_2420_PHYS	OMAP2420_DSP_MEM_BASE	/* 0x58000000 */
 #define DSP_MEM_2420_VIRT	0xe0000000
@@ -154,6 +165,10 @@
  * Need to look at the Size 4M for L4.
  * VPOM3430 was not working for Int controller
  */
+
+#define L4_WK_34XX_PHYS		L4_WK_34XX_BASE	/* 0x48300000 --> 0xfa300000 */
+#define L4_WK_34XX_VIRT		(L4_WK_34XX_PHYS + OMAP2_L4_IO_OFFSET)
+#define L4_WK_34XX_SIZE		SZ_1M
 
 #define L4_PER_34XX_PHYS	L4_PER_34XX_BASE
 						/* 0x49000000 --> 0xfb000000 */
@@ -294,6 +309,7 @@ extern void omap2_init_common_hw(struct omap_sdrc_params *sdrc_cs0,
 				 struct omap_opp *mpu_opps,
 				 struct omap_opp *dsp_opps,
 				 struct omap_opp *l3_opps);
+extern void omap2_map_common_io(void);
 
 #define __arch_ioremap(p,s,t)	omap_ioremap(p,s,t)
 #define __arch_iounmap(v)	omap_iounmap(v)

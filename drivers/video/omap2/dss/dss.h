@@ -346,7 +346,8 @@ int dispc_calc_clock_rates(unsigned long dispc_fclk_rate,
 		struct dispc_clock_info *cinfo);
 int dispc_set_clock_div(struct dispc_clock_info *cinfo);
 int dispc_get_clock_div(struct dispc_clock_info *cinfo);
-
+void dispc_save_off_context(void);
+void dispc_restore_off_context(void);
 
 /* VENC */
 int venc_init(struct platform_device *pdev);

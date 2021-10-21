@@ -23,7 +23,8 @@
 #define CPCAP_MDB_LED_CLASS_NAME "cpcap-mdb-led"
 #define CPCAP_MDB_LED_DRV_NAME "leds-cpcap-mdb"
 
-#define CPCAP_MDB_LED_REG "sw5"
+
+#define CPCAP_MDB_REGULATOR_NAME_SIZE 16
 
 #define CPCAP_MDB_INIT_MASK        0xFFFF
 #define CPCAP_MDB_INIT             0xB008
@@ -38,6 +39,7 @@
 struct cpcap_mdb_led_config_data {
 	u16 init;
 	struct cpcap_abmode_config_data *abmode_config;
+	char regulator[CPCAP_MDB_REGULATOR_NAME_SIZE];
 	char class_name[CPCAP_MDB_LED_CLASS_NAME_SIZE];
 };
 

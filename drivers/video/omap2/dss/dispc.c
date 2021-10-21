@@ -163,6 +163,7 @@ static struct {
 } dispc;
 
 static void _omap_dispc_set_irqs(void);
+static void _omap_dispc_initial_config(void);
 
 static inline void dispc_write_reg(const struct dispc_reg idx, u32 val)
 {
@@ -178,6 +179,19 @@ static inline u32 dispc_read_reg(const struct dispc_reg idx)
 	dispc.ctx[(DISPC_##reg).idx / sizeof(u32)] = dispc_read_reg(DISPC_##reg)
 #define RR(reg) \
 	dispc_write_reg(DISPC_##reg, dispc.ctx[(DISPC_##reg).idx / sizeof(u32)])
+
+void dispc_save_off_context(void)
+{
+	SR(SYSCONFIG);
+	SR(CONFIG);
+}
+
+void dispc_restore_off_context(void)
+{
+	RR(SYSCONFIG);
+	RR(CONFIG);
+	_omap_dispc_initial_config();
+}
 
 void dispc_save_context(void)
 {

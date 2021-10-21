@@ -10,6 +10,7 @@
 
 #include <linux/kernel.h>
 #include <linux/device.h>
+#include <linux/gpio_mapping.h>
 #include <linux/irq.h>
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
@@ -27,6 +28,14 @@
 #ifdef CONFIG_ARM_OF
 #include <mach/dt_path.h>
 #include <asm/prom.h>
+#endif
+
+#if defined(CONFIG_SND_SOC_CS48L10) || defined(CONFIG_SND_SOC_CS48L10_MODULE)
+#include <linux/delay.h>
+#include <linux/spi/cs48l10.h>
+
+#define CS48L10_BUSY_GPIO   143
+#define CS48L10_INT_GPIO    142
 #endif
 
 struct cpcap_spi_init_data mapphone_cpcap_spi_init[CPCAP_REG_SIZE + 1] = {
@@ -75,6 +84,7 @@ struct cpcap_spi_init_data mapphone_cpcap_spi_init[CPCAP_REG_SIZE + 1] = {
 };
 
 unsigned short cpcap_regulator_mode_values[CPCAP_NUM_REGULATORS] = {
+	[CPCAP_SW4]      = 0x0100,
 	[CPCAP_SW5]      = 0x0022,
 	[CPCAP_VCAM]     = 0x0003,
 	[CPCAP_VCSI]     = 0x0003,
@@ -97,6 +107,7 @@ unsigned short cpcap_regulator_mode_values[CPCAP_NUM_REGULATORS] = {
 };
 
 unsigned short cpcap_regulator_off_mode_values[CPCAP_NUM_REGULATORS] = {
+	[CPCAP_SW4]      = 0x0000,
 	[CPCAP_SW5]      = 0x0000,
 	[CPCAP_VCAM]     = 0x0000,
 	[CPCAP_VCSI]     = 0x0000,
@@ -121,6 +132,10 @@ unsigned short cpcap_regulator_off_mode_values[CPCAP_NUM_REGULATORS] = {
 #define CPCAP_GPIO 0
 
 #define REGULATOR_CONSUMER(name, device) { .supply = name, .dev = device, }
+
+struct regulator_consumer_supply cpcap_sw4_consumers[] = {
+	REGULATOR_CONSUMER("sw4", NULL /* DSP */),
+};
 
 struct regulator_consumer_supply cpcap_sw5_consumers[] = {
 	REGULATOR_CONSUMER("sw5", NULL /* lighting_driver */),
@@ -189,6 +204,17 @@ struct regulator_consumer_supply cpcap_vrf1_consumers[] = {
 
 
 static struct regulator_init_data cpcap_regulator[CPCAP_NUM_REGULATORS] = {
+	[CPCAP_SW4] = {
+		.constraints = {
+			.min_uV			=  600000,
+			.max_uV			= 1450000,
+			.valid_ops_mask		= (REGULATOR_CHANGE_VOLTAGE |
+						   REGULATOR_CHANGE_STATUS),
+			.apply_uV		= 1,
+		},
+		.num_consumer_supplies	= ARRAY_SIZE(cpcap_sw4_consumers),
+		.consumer_supplies	= cpcap_sw4_consumers,
+	},
 	[CPCAP_SW5] = {
 		.constraints = {
 			.min_uV			= 5050000,
@@ -303,7 +329,8 @@ static struct regulator_init_data cpcap_regulator[CPCAP_NUM_REGULATORS] = {
 		.constraints = {
 			.min_uV			= 1800000,
 			.max_uV			= 1900000,
-			.valid_ops_mask		= 0,
+			.valid_ops_mask		= (REGULATOR_CHANGE_VOLTAGE |
+						   REGULATOR_CHANGE_STATUS),
 		},
 		.num_consumer_supplies	= ARRAY_SIZE(cpcap_vwlan1_consumers),
 		.consumer_supplies	= cpcap_vwlan1_consumers,
@@ -380,59 +407,8 @@ static struct cpcap_adc_ato mapphone_cpcap_adc_ato = {
 	.atox_out = 0,
 	.adc_ps_factor_out = 0,
 	.atox_ps_factor_out = 0,
+	.ichrg_sense_res = 100,
 };
-
-static void ac_changed(struct power_supply *ac,
-		       struct cpcap_batt_ac_data *ac_state)
-{
-	static char requested;
-	int ret = 0;
-
-	if (!ac || !ac_state)
-		return;
-
-	if (ac_state->online) {
-		/* To reduce OMAP Vdd1 DC/DC converter output voltage dips as
-		 * much as possible, limit Vdd1 to OPP3-OPP5 when the phone is
-		 * connected to a charger. */
-		if (!requested)
-			ret = resource_request("vdd1_opp", ac->dev, VDD1_OPP3);
-
-		if (!ret)
-			requested = 1;
-	} else if (requested) {
-		ret = resource_release("vdd1_opp", ac->dev);
-
-		if (!ret)
-			requested = 0;
-	}
-}
-
-static void batt_changed(struct power_supply *batt,
-			 struct cpcap_batt_data *batt_state)
-{
-	static char requested;
-	int ret = 0;
-
-	if (!batt || !batt_state)
-		return;
-
-	if (batt_state->batt_temp < 0) {
-		/* To reduce OMAP Vdd1 DC/DC converter output voltage dips as
-		 * much as possible, limit Vdd1 to OPP3-OPP5 when the
-		 * temperature is below 0 degrees C. */
-		if (!requested)
-			ret = resource_request("vdd1_opp", batt->dev, VDD1_OPP3);
-
-		if (!ret)
-			requested = 1;
-	} else if (requested) {
-		ret = resource_release("vdd1_opp", batt->dev);
-
-		if (!ret)
-			requested = 0;
-	}
-}
 
 static struct cpcap_leds mapphone_cpcap_leds = {
 	.display_led = {
@@ -461,10 +437,10 @@ static struct cpcap_leds mapphone_cpcap_leds = {
 	    * als_max - Maximum ALS data
 	    * als_min - Minimum ALS data */
 	.als_data = {
-		.lux_max = 5000,
-		.lux_min = 100,
-		.als_max = 590,
-		.als_min = 9,
+		.lux_max = 5115,
+		.lux_min = 0,
+		.als_max = 1023,
+		.als_min = 0,
 	},
 };
 
@@ -476,10 +452,50 @@ static struct cpcap_platform_data mapphone_cpcap_data = {
 	.adc_ato = &mapphone_cpcap_adc_ato,
 	.leds = &mapphone_cpcap_leds,
 	.ac_changed = NULL,
-	.batt_changed = batt_changed,
+	.batt_changed = NULL,
 	.usb_changed = NULL,
 	.is_umts = 0,
+	.hwcfg = {CPCAP_HWCFG0_NONE, CPCAP_HWCFG1_NONE},
 };
+
+#if defined(CONFIG_SND_SOC_CS48L10) || defined(CONFIG_SND_SOC_CS48L10_MODULE)
+/* CS48L10 INT <- OMAP3 GPIO142 */
+/* CS48L10 RESET -> OMAP3 GPIO152 */
+static struct cs48l10_platform_data cs48l10_config = {
+	.gpio_busy      = CS48L10_BUSY_GPIO,
+	.gpio_int       = CS48L10_INT_GPIO,
+	.gpio_reset     = 0,
+};
+
+static struct omap2_mcspi_device_config cs48l10_mcspi_config = {
+	.turbo_mode     = 0,
+	.single_channel = 1,
+};
+
+static void __init cs48l10_init(void)
+{
+	cs48l10_config.gpio_reset     = get_gpio_by_name("dsp_reset_b");
+
+	if (gpio_request(cs48l10_config.gpio_reset, "cs48l10_hw_reset") < 0) {
+		printk(KERN_ERR "CS48L10: Failed to request GPIO%d for RESET",
+			cs48l10_config.gpio_reset);
+	}
+	gpio_direction_output(cs48l10_config.gpio_reset, 0);
+
+	if (gpio_request(CS48L10_BUSY_GPIO, "cs48l10_hw_busy") < 0) {
+		printk(KERN_ERR "CS48L10: Failed to request GPIO%d for BUSY/HS0",
+			CS48L10_BUSY_GPIO);
+	}
+	gpio_direction_input(CS48L10_BUSY_GPIO);
+
+	if (gpio_request(CS48L10_INT_GPIO, "cs48l10_hw_int") < 0) {
+		printk(KERN_ERR "CS48L10: Failed to request GPIO%d for INT/HS1",
+		CS48L10_INT_GPIO);
+	}
+	gpio_direction_input(CS48L10_INT_GPIO);
+
+}
+#endif
 
 static struct spi_board_info mapphone_spi_board_info[] __initdata = {
 	{
@@ -490,6 +506,17 @@ static struct spi_board_info mapphone_spi_board_info[] __initdata = {
 		.controller_data = &mapphone_cpcap_data,
 		.mode = SPI_CS_HIGH,
 	},
+#if defined(CONFIG_SND_SOC_CS48L10) || defined(CONFIG_SND_SOC_CS48L10_MODULE)
+	{
+		.modalias = "cs48l10",
+		.bus_num = 2, /* McSPI2*/
+		.chip_select = 0, /* McSPI2_CS0 */
+		.max_speed_hz = 12000000, /* Max clock per spec is 24Mhz */
+		.mode = SPI_MODE_0, /* normal clock, rising edge */
+		.controller_data = &cs48l10_mcspi_config,
+		.platform_data = &cs48l10_config, /* (BUSY,INT,RESET) */
+	},
+#endif
 };
 
 #ifdef CONFIG_ARM_OF
@@ -597,17 +624,15 @@ static void __init cpcap_of_init(void)
 	int size, unit_size, i, count;
 	struct device_node *node;
 	const void *prop;
-	struct device_node *bp_node;
-	const void *bp_prop;
 	char *cpcap_bp_model = "CDMA";
 
-	bp_node = of_find_node_by_path(DT_PATH_CHOSEN);
-	if (bp_node) {
-		bp_prop = of_get_property(bp_node, DT_PROP_CHOSEN_BP, NULL);
-		if (bp_prop)
-			cpcap_bp_model = (char *)bp_prop;
+	node = of_find_node_by_path(DT_PATH_CHOSEN);
+	if (node) {
+		prop = of_get_property(node, DT_PROP_CHOSEN_BP, NULL);
+		if (prop)
+			cpcap_bp_model = (char *)prop;
 
-		of_node_put(bp_node);
+		of_node_put(node);
 	}
 
 	if (strcmp(cpcap_bp_model, "UMTS") >= 0)
@@ -633,63 +658,82 @@ static void __init cpcap_of_init(void)
 
 	unit_size = sizeof(struct omap_spi_init_entry);
 	prop = of_get_property(node, DT_PROP_CPCAP_SPIINIT, &size);
-	if ((!prop) || (size % unit_size)) {
-		printk(KERN_ERR "Read property %s error!\n",
+	if ((!prop) || (size % unit_size))
+		printk(KERN_INFO "Read property %s error!\n",
 				DT_PROP_CPCAP_SPIINIT);
-		of_node_put(node);
-		return;
+	else {
+		count = size / unit_size;
+		printk(KERN_INFO "cpcap init size = %d\n", count);
+
+		for (i = 0; i < count; i++)
+			cpcap_spi_init((struct omap_spi_init_entry *)prop + i);
 	}
-
-	count = size / unit_size;
-	printk(KERN_INFO "cpcap init size = %d\n", count);
-
-	for (i = 0; i < count; i++)
-		cpcap_spi_init((struct omap_spi_init_entry *)prop + i);
 
 	unit_size = sizeof(struct omap_rgt_init_entry);
 	prop = of_get_property(node, DT_PROP_CPCAP_RGTINIT, &size);
-	if ((!prop) || (size % unit_size)) {
-		printk(KERN_ERR "Read property %s error!\n",
+	if ((!prop) || (size % unit_size))
+		printk(KERN_INFO "Read property %s error!\n",
 				DT_PROP_CPCAP_RGTINIT);
-		of_node_put(node);
-		return;
+	else {
+		count = size / unit_size;
+		printk(KERN_INFO "cpcap init size = %d\n", count);
+
+		for (i = 0; i < count; i++)
+			regulator_init((struct omap_rgt_init_entry *)prop + i);
 	}
-
-	count = size / unit_size;
-	printk(KERN_INFO "cpcap init size = %d\n", count);
-
-	for (i = 0; i < count; i++)
-		regulator_init((struct omap_rgt_init_entry *)prop + i);
 
 	unit_size = sizeof(struct omap_rgt_mode_entry);
 	prop = of_get_property(node, DT_PROP_CPCAP_RGTMODE, &size);
-	if ((!prop) || (size % unit_size)) {
-		printk(KERN_ERR "Read property %s error!\n",
+	if ((!prop) || (size % unit_size))
+		printk(KERN_INFO "Read property %s error!\n",
 				DT_PROP_CPCAP_RGTMODE);
-		of_node_put(node);
-		return;
+	else {
+		count = size / unit_size;
+		printk(KERN_INFO "cpcap init size = %d\n", count);
+
+		for (i = 0; i < count; i++)
+			regulator_mode_init(
+				(struct omap_rgt_mode_entry *)prop + i);
 	}
-
-	count = size / unit_size;
-	printk(KERN_INFO "cpcap init size = %d\n", count);
-
-	for (i = 0; i < count; i++)
-		regulator_mode_init((struct omap_rgt_mode_entry *)prop + i);
 
 	unit_size = sizeof(struct omap_rgt_mode_entry);
 	prop = of_get_property(node, DT_PROP_CPCAP_RGTOFFMODE, &size);
-	if ((!prop) || (size % unit_size)) {
-		printk(KERN_ERR "Read property %s error!\n",
+	if ((!prop) || (size % unit_size))
+		printk(KERN_INFO "Read property %s error!\n",
 				DT_PROP_CPCAP_RGTOFFMODE);
-		of_node_put(node);
-		return;
+	else {
+		count = size / unit_size;
+		printk(KERN_INFO "cpcap init size = %d\n", count);
+
+		for (i = 0; i < count; i++)
+			regulator_off_mode_init(
+				(struct omap_rgt_mode_entry *)prop + i);
 	}
 
-	count = size / unit_size;
-	printk(KERN_INFO "cpcap init size = %d\n", count);
+	unit_size = sizeof(u16);
+	prop = of_get_property(node, DT_PROP_CPCAP_HWCFG, &size);
+	if ((!prop) || (size % unit_size))
+		printk(KERN_INFO "Read property %s error.  Using defaults\n",
+				DT_PROP_CPCAP_HWCFG);
+	else {
+		count = size / unit_size;
+		printk(KERN_INFO "cpcap hwcfg size = %d\n", count);
+		for (i = 0; i < count; i++) {
+			mapphone_cpcap_data.hwcfg[i] |= *((u16 *)prop+i);
+			printk(KERN_INFO "CPCAP: overwriting hwcfg[%d] with: "
+				"0x%x\n", i, mapphone_cpcap_data.hwcfg[i]);
+		}
+	}
 
-	for (i = 0; i < count; i++)
-		regulator_off_mode_init((struct omap_rgt_mode_entry *)prop + i);
+	prop = of_get_property(node, DT_PROP_CPCAP_ICHRGSENSE_RES, NULL);
+	if (!prop)
+		printk(KERN_INFO "Read property %s error.  Using default.\n",
+				DT_PROP_CPCAP_ICHRGSENSE_RES);
+	else {
+		mapphone_cpcap_data.adc_ato->ichrg_sense_res  = *(u16 *)prop;
+		printk(KERN_INFO "CPCAP: overwriting ichrg_sense_res with %d\n",
+			mapphone_cpcap_data.adc_ato->ichrg_sense_res);
+	}
 
 	of_node_put(node);
 	return;
@@ -724,6 +768,10 @@ void __init mapphone_spi_init(void)
 	irq = gpio_to_irq(CPCAP_GPIO);
 	set_irq_type(irq, IRQ_TYPE_EDGE_RISING);
 	omap_cfg_reg(AF26_34XX_GPIO0);
+
+#if defined(CONFIG_SND_SOC_CS48L10) || defined(CONFIG_SND_SOC_CS48L10_MODULE)
+	cs48l10_init();
+#endif
 
 	mapphone_spi_board_info[0].irq = irq;
 	spi_register_board_info(mapphone_spi_board_info,

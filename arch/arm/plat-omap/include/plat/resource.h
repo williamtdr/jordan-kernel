@@ -88,4 +88,9 @@ int resource_request(const char *name, struct device *dev,
 int resource_release(const char *name, struct device *dev);
 int resource_get_level(const char *name);
 
+void set_and_lock_opp_2(void);
+void set_and_lock_opps_min(void);
+void set_and_lock_opps_max(bool panic);
+void unlock_opps(void);
+
 #endif /* __ARCH_ARM_OMAP_RESOURCE_H */

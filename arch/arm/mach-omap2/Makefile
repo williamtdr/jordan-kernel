@@ -91,20 +91,23 @@ obj-$(CONFIG_MACH_OMAP_ZOOM2)		+= board-zoom2.o \
 					   board-zoom2-wifi.o
 
 obj-$(CONFIG_MACH_MAPPHONE)             += board-mapphone.o \
-                                           board-mapphone-camera.o \
+board-mapphone-flash.o \
+                                           board-mapphone-padconf.o \
                                            board-mapphone-panel.o \
                                            board-mapphone-spi.o \
                                            board-mapphone-cpcap-client.o \
                                            board-mapphone-sensors.o \
+										   board-mapphone-touch.o \
                                            board-mapphone-hsmmc.o \
                                            board-mapphone-keypad.o \
                                            board-mapphone-wifi.o \
                                            board-mapphone-gpio.o \
-                                           board-mapphone-usb.o \
-					   board-mapphone-padconf.o
-
+                                           board-mapphone-modem.o \
+                                           board-mapphone-mmcprobe.o \
+                                           board-mapphone-usb.o
+obj-$(CONFIG_MOT_FEAT_MDTV)             += board-mapphone-mdtv.o
 obj-$(CONFIG_EMU_UART_DEBUG)		+= board-mapphone-emu_uart.o
-
+obj-$(CONFIG_HAVE_TRACE_CLOCK)		+= trace-clock.o
 obj-$(CONFIG_MACH_NOKIA_RX51)		+= board-rx51.o \
 					   board-rx51-sdram.o \
 					   board-rx51-peripherals.o \

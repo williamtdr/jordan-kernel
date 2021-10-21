@@ -31,10 +31,16 @@
 #include <plat/powerdomain.h>
 #include <plat/clockdomain.h>
 
+#ifdef CONFIG_ARM_OF
+#include <plat/board-mapphone.h>
+#endif
+
 #include "prm.h"
 #include "cm.h"
 #include "pm.h"
+#ifdef CONFIG_OMAP_SMARTREFLEX
 #include "smartreflex.h"
+#endif
 #include "prm-regbits-34xx.h"
 
 int omap2_pm_debug;
@@ -265,6 +271,8 @@ static int pm_dbg_show_regs(struct seq_file *s, void *unused)
 
 	if (reg_set == 0) {
 		store = kmalloc(pm_dbg_get_regset_size(), GFP_KERNEL);
+		if (store == NULL)
+			return -ENOMEM;
 		ptr = store;
 		pm_dbg_regset_store(ptr);
 	} else {
@@ -343,15 +351,15 @@ int pm_dbg_regset_save(int reg_set)
 	return 0;
 }
 
-#define CORE_REGS_LEN 360
-void pm_dbg_show_core_regs(void)
+#define SHOW_CM_REGS_LEN 512
+void pm_dbg_show_cm_regs(const char *domain)
 {
 	int i = 0;
 	int j = 0;
 	unsigned long val = 0;
 	int regs;
 	u32 *ptr;
-	static char core_buf[CORE_REGS_LEN];
+	static char cm_buf[SHOW_CM_REGS_LEN];
 	char *pbuf;
 
 	if (pm_dbg_reg_set[0] == NULL)
@@ -359,38 +367,38 @@ void pm_dbg_show_core_regs(void)
 	else
 		ptr = pm_dbg_reg_set[0];
 
-	memset(core_buf, 0, CORE_REGS_LEN);
+	memset(cm_buf, 0, SHOW_CM_REGS_LEN);
 
 	while (pm_dbg_reg_modules[i].name[0] != 0) {
-		if (strcmp(pm_dbg_reg_modules[i].name, "CORE") ||
+		if (strcmp(pm_dbg_reg_modules[i].name, domain) ||
 			pm_dbg_reg_modules[i].type != MOD_CM) {
 			ptr += ((pm_dbg_reg_modules[i].high + 4
 				- pm_dbg_reg_modules[i].low)/4);
 			i++;
 			continue;
 		}
-		/* print the core domain CM registers only.*/
+		/* print the CM registers for the domain */
 		printk(KERN_INFO "MOD: CM_%s (%08x)\n",
 			pm_dbg_reg_modules[i].name,
 			(u32)(OMAP3430_CM_BASE +
 			pm_dbg_reg_modules[i].offset));
 
 		regs = 0;
-		pbuf = core_buf;
+		pbuf = cm_buf;
 		for (j = pm_dbg_reg_modules[i].low;
 			j <= pm_dbg_reg_modules[i].high; j += 4) {
 			val = *(ptr++);
-			if (val && (CORE_REGS_LEN-(pbuf-core_buf)) > 20) {
+			if (val && (SHOW_CM_REGS_LEN-(pbuf-cm_buf)) > 20) {
 				pbuf += snprintf(pbuf,
-					CORE_REGS_LEN-(pbuf-core_buf),
+					SHOW_CM_REGS_LEN-(pbuf-cm_buf),
 					"%02x => %08lx ", j, val);
 				regs++;
 				if (regs % 4 == 0)
 					pbuf += snprintf(pbuf,
-					CORE_REGS_LEN-(pbuf-core_buf), "\n");
+					SHOW_CM_REGS_LEN-(pbuf-cm_buf), "\n");
 			}
 		}
-		printk(KERN_INFO "%s\n", core_buf);
+		printk(KERN_INFO "%s\n", cm_buf);
 		break;
 	}
 }
@@ -412,44 +420,98 @@ void pm_dbg_show_wakeup_source(void)
 		pbuf += snprintf(pbuf, len, "WAKEDUP BY: ");
 
 	val = prm_read_mod_reg(WKUP_MOD, PM_WKST);
-	val &= prm_read_mod_reg(WKUP_MOD, OMAP3430_PM_MPUGRPSEL);
+	val &= prm_read_mod_reg(WKUP_MOD, PM_WKEN);
 	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
 	if (val && len > 30)
 		pbuf += snprintf(pbuf, len, "WKUP_MOD(0x%x), ", val);
 
 	val = prm_read_mod_reg(CORE_MOD, PM_WKST1);
-	val &= prm_read_mod_reg(CORE_MOD, OMAP3430_PM_MPUGRPSEL);
+	val &= prm_read_mod_reg(CORE_MOD, PM_WKEN1);
 	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
 	if (val && len > 30)
 		pbuf += snprintf(pbuf, len, "CORE_MOD(0x%x), ", val);
 
 	val = prm_read_mod_reg(CORE_MOD, OMAP3430ES2_PM_WKST3);
-	val &= prm_read_mod_reg(CORE_MOD, OMAP3430ES2_PM_MPUGRPSEL3);
+	val &= prm_read_mod_reg(CORE_MOD, OMAP3430ES2_PM_WKEN3);
 	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
 	if (val && len > 30)
 		pbuf += snprintf(pbuf, len, "CORE3_MOD(0x%x), ", val);
 
 	val = prm_read_mod_reg(OMAP3430_PER_MOD, PM_WKST);
-	val &= prm_read_mod_reg(OMAP3430_PER_MOD, OMAP3430_PM_MPUGRPSEL);
+	val &= prm_read_mod_reg(OMAP3430_PER_MOD, PM_WKEN);
 	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
 	if (val && len > 30)
 		pbuf += snprintf(pbuf, len, "PER_MOD(0x%x), ", val);
 
 	val = prm_read_mod_reg(OMAP3430ES2_USBHOST_MOD, PM_WKST);
-	val &= prm_read_mod_reg(OMAP3430ES2_USBHOST_MOD, OMAP3430_PM_MPUGRPSEL);
+	val &= prm_read_mod_reg(OMAP3430ES2_USBHOST_MOD, PM_WKEN);
 	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
 	if (val && len > 30)
 		pbuf += snprintf(pbuf, len, "USBHOST(0x%x), ", val);
 
+	val = prm_read_mod_reg(OMAP3430_DSS_MOD, PM_WKST);
+	val &= prm_read_mod_reg(OMAP3430_DSS_MOD, PM_WKEN);
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "DSS(0x%x), ", val);
+
 	val = prm_read_mod_reg(OCP_MOD, OMAP3_PRM_IRQSTATUS_MPU_OFFSET);
+	val &= prm_read_mod_reg(OCP_MOD, OMAP3_PRM_IRQENABLE_MPU_OFFSET);
 	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
 	if (val && len > 30)
 		pbuf += snprintf(pbuf, len, "MPU_IRQSTATUS(0x%x), ", val);
+
+	val = prm_read_mod_reg(OMAP3430_IVA2_MOD, OMAP3430_PRM_IRQSTATUS_IVA2);
+	val &= prm_read_mod_reg(OMAP3430_IVA2_MOD, OMAP3430_PRM_IRQENABLE_IVA2);
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "IVA2_IRQSTATUS(0x%x), ", val);
+
+	val = __raw_readl(OMAP2_L4_IO_ADDRESS(OMAP34XX_IC_BASE + (0x009C)));
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "INTC_FIQ0(0x%x), ", val);
+
+	val = __raw_readl(OMAP2_L4_IO_ADDRESS(OMAP34XX_IC_BASE + (0x00bC)));
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "INTC_FIQ1(0x%x), ", val);
+
+	val = __raw_readl(OMAP2_L4_IO_ADDRESS(OMAP34XX_IC_BASE + (0x00dC)));
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "INTC_FIQ2(0x%x), ", val);
+
 
 	val = __raw_readl(OMAP2_L4_IO_ADDRESS(OMAP34XX_IC_BASE + (0x0098)));
 	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
 	if (val && len > 30)
 		pbuf += snprintf(pbuf, len, "INTC_IRQ0(0x%x), ", val);
+
+	val = __raw_readl(OMAP2_L4_IO_ADDRESS(OMAP34XX_IC_BASE + (0x00B8)));
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "INTC_IRQ1(0x%x), ", val);
+
+	val = __raw_readl(OMAP2_L4_IO_ADDRESS(OMAP34XX_IC_BASE + (0x00D8)));
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "INTC_IRQ2(0x%x), ", val);
+
+	val = __raw_readl(OMAP2_L4_IO_ADDRESS(OMAP34XX_IC_BASE + (0x009C)));
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "INTC_FIQ0(0x%x), ", val);
+
+	val = __raw_readl(OMAP2_L4_IO_ADDRESS(OMAP34XX_IC_BASE + (0x00BC)));
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "INTC_FIQ1(0x%x), ", val);
+
+	val = __raw_readl(OMAP2_L4_IO_ADDRESS(OMAP34XX_IC_BASE + (0x00DC)));
+	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
+	if (val && len > 30)
+		pbuf += snprintf(pbuf, len, "INTC_FIQ2(0x%x), ", val);
 
 	len = WAKEUP_SOURCE_LEN - (pbuf - buf);
 	if ((val & (1<<29)) && len > 20) {
@@ -500,7 +562,13 @@ void pm_dbg_show_wakeup_source(void)
 		pbuf += snprintf(pbuf, len, "INTC_IRQ2(0x%x)", val);
 
 	printk(KERN_INFO "%s\n", buf);
+
+#ifdef CONFIG_ARM_OF
+	mapphone_padconf_print_wakeups();
+#endif
+
 }
+
 
 static int pm_dbg_show_padconf_regs(struct seq_file *s, void *unused)
 {
@@ -828,6 +896,8 @@ static int __init pm_dbg_init(void)
 				   &sleep_while_idle, &pm_dbg_option_fops);
 	(void) debugfs_create_file("wakeup_timer_seconds", S_IRUGO | S_IWUGO, d,
 				   &wakeup_timer_seconds, &pm_dbg_option_fops);
+	(void) debugfs_create_file("offmode_strategy", S_IRUGO | S_IWUGO, d,
+				   &offmode_strategy, &pm_dbg_option_fops);
 
 	if (cpu_is_omap3630())
 		(void) debugfs_create_file("enable_abb_mode", S_IRUGO | S_IWUGO,
@@ -841,7 +911,9 @@ static int __init pm_dbg_init(void)
 					   &voltage_off_while_idle,
 					   &pm_dbg_option_fops);
 
+#ifdef CONFIG_OMAP_SMARTREFLEX
 	(void)sr_debugfs_create_entries(d);
+#endif
 
 	pm_dbg_init_done = 1;
 

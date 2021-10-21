@@ -216,6 +216,7 @@ static struct gpio_mapping gpio_map_table[GPIO_MAP_SIZE] = {
 	{1, 163, "mmc_detect"},
 	{1, 177, "slider_data"},
 	{1, 65, "wlan_host_wake"},
+	{1, 182, "factory_kill_gpio"}
 };
 
 #ifdef CONFIG_ARM_OF

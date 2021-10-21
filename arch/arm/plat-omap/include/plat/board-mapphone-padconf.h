@@ -46,6 +46,7 @@
 #define OMAP343X_PADCONF_3630_GPIO_BASE  (OMAP343X_CTRL_BASE + 0xA54)
 #define OMAP343X_PADCONF_3630_GPIO_TOP   (OMAP343X_CTRL_BASE + 0xA5A)
 
+#define OMAP343X_PADCONF_OFF_WAKEUP_EVENT   (1 << 15)
 #define OMAP343X_PADCONF_OFF_WAKEUP_ENABLED (1 << 14)
 
 #define OMAP343X_PADCONF_OFF_PULL_UP	    (1 << 13)
@@ -135,5 +136,7 @@ struct mux_offmode_conf_entry {
 	u8 offwkup_en;
 } __attribute__ ((__packed__));
 #endif
+
+void mapphone_padconf_print_wakeups(void);
 
 #endif

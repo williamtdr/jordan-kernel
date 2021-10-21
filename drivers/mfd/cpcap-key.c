@@ -22,8 +22,7 @@
 #include <linux/input.h>
 #include <linux/spi/cpcap.h>
 #include <linux/spi/cpcap-regbits.h>
-
-
+#include <linux/msp430.h>
 
 struct cpcap_key_data {
 	struct input_dev *input_dev;
@@ -56,6 +55,11 @@ static int __init cpcap_key_probe(struct platform_device *pdev)
 	set_bit(EV_KEY, key->input_dev->evbit);
 	set_bit(KEY_MEDIA, key->input_dev->keybit);
 	set_bit(KEY_END, key->input_dev->keybit);
+	set_bit(KEY_POWER_DOUBLE, key->input_dev->keybit);
+	set_bit(KEY_PLAYCD, key->input_dev->keybit);
+	set_bit(KEY_VOLUMEDOWN, key->input_dev->keybit);
+	set_bit(KEY_VOLUMEUP, key->input_dev->keybit);
+	set_bit(KEY_POWER_SONG, key->input_dev->keybit);
 
 	key->input_dev->name = "cpcap-key";
 
@@ -94,6 +98,11 @@ void cpcap_broadcast_key_event(struct cpcap_device *cpcap,
 			       unsigned int code, int value)
 {
 	struct cpcap_key_data *key = cpcap_get_keydata(cpcap);
+
+	/* Notify MSP driver of power key down event */
+	if (key && value)
+		msp430_disable_offmode();
+
 
 	if (key && key->input_dev)
 		input_report_key(key->input_dev, code, value);

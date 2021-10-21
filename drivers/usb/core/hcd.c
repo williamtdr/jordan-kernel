@@ -1904,7 +1904,11 @@ irqreturn_t usb_hcd_irq (int irq, void *__hcd)
 		rc = IRQ_NONE;
 #ifdef CONFIG_MACH_MAPPHONE
 		if (!is_cdma_phone()) {
+#ifdef CONFIG_USB_EHCI_HCD
+			/*Compilation error if you try to compile without
+			the ehci modules.*/
 			clear_ehci_intr(hcd);
+#endif
 			rc = IRQ_HANDLED;
 		}
 #endif

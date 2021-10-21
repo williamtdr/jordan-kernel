@@ -32,6 +32,9 @@
 #define MAX_TEMP_LVL 27
 #define FOUR_POINT_TWO_ADC 801
 
+#define DEFAULT_ICHARGE_SENSE_RES 100
+#define DEFAULT_ISENSE_RANGE 5000
+
 struct cpcap_adc {
 	struct cpcap_device *cpcap;
 
@@ -99,6 +102,7 @@ static struct conversion_tbl bank0_conversion[CPCAP_ADC_BANK0_NUM] = {
 		{CONV_TYPE_MAPPING,   0,    0, 0,     1,    1},
 	[CPCAP_ADC_BPLUS_AD4] =
 		{CONV_TYPE_DIRECT,    0, 2400, 0,  2300, 1023},
+	/* ISENSE multiplier is updated in probe function below */
 	[CPCAP_ADC_CHG_ISENSE] =
 		{CONV_TYPE_DIRECT, -512,    2, 0,  5000, 1023},
 	[CPCAP_ADC_BATTI_ADC] =
@@ -608,6 +612,7 @@ static int __devinit cpcap_adc_probe(struct platform_device *pdev)
 {
 	struct cpcap_adc *adc;
 	unsigned short cal_data;
+	struct cpcap_platform_data *data;
 
 	if (pdev->dev.platform_data == NULL) {
 		dev_err(&pdev->dev, "no platform_data\n");
@@ -622,6 +627,13 @@ static int __devinit cpcap_adc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, adc);
 	adc->cpcap->adcdata = adc;
+
+	data = adc->cpcap->spi->controller_data;
+
+	/* Scale ICHRG sense ADCs for non-standard sense resistor */
+	bank0_conversion[CPCAP_ADC_CHG_ISENSE].multiplier =
+		(DEFAULT_ICHARGE_SENSE_RES * DEFAULT_ISENSE_RANGE) /
+		data->adc_ato->ichrg_sense_res;
 
 	mutex_init(&adc->queue_mutex);
 

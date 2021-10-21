@@ -271,6 +271,14 @@ config VIB_GPIO
 	bool "GPIO Vibrator"
 	default n
 
+config SENSORS_MSP430
+        tristate "MSP430 Sensor Processor"
+        default n
+        depends on I2C
+        help
+        Say yes here if you wish to include the TI
+        MSP430 Sensor processor driver.
+
 config SENSORS_AKM8973
 	tristate "AKM8973 Magnetometer"
 	default n
@@ -412,25 +420,5 @@ source "drivers/misc/smc/Kconfig"
 source "drivers/misc/sec/Kconfig"
 source "drivers/misc/netmux/Kconfig"
 source "drivers/misc/netmux_linkdriver/Kconfig"
-source "drivers/misc/camera_misc/Kconfig"
-source "drivers/misc/ti-st/Kconfig"
-
-config FSYNC_CONTROL
-	bool "Support for FSync Control"
-	default y
-	help
-	  Say Y here to enable FSync Control
-
-config WRITEBACK_CONTROL
-	bool "Support for dynamic writeback support"
-	default y
-	help
-	  Say Y here to enable dynamic Writeback
-
-config DISPLAY_CONTROL
-	bool "Enables support for display control"
-	default y
-	help
-	  Say Y here to enable display control
 
 endif # MISC_DEVICES

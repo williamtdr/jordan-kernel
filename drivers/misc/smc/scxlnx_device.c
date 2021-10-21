@@ -1065,7 +1065,7 @@ static int SCXLNXDeviceMmap(struct file *file, struct vm_area_struct *vma)
 
 /*-------------------------------------------------------------------------- */
 
-module_init(SCXLNXDeviceRegister);
+/*module_init(SCXLNXDeviceRegister);*/
 /*
  *There is no way to unload the driver as the API_HAL_SDP_RUNTIME_INIT call
  *can be called only once.
